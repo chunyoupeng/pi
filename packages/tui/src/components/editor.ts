@@ -274,8 +274,28 @@ export class Editor implements Component, Focusable {
 		cursorCol: 0,
 	};
 
-	/** Focusable interface - set by TUI when focus changes */
-	focused: boolean = false;
+	/** Backing field for the Focusable `focused` flag. */
+	private _focused = false;
+
+	/** Blink phase: true = fake cursor visible, false = hidden mid-blink. */
+	private cursorBlinkOn = false;
+	private blinkTimer?: ReturnType<typeof setInterval>;
+	private static readonly BLINK_INTERVAL_MS = 530;
+
+	/**
+	 * Focusable interface - set by TUI when focus changes.
+	 * Focus transitions start/stop the cursor blink cycle and request a
+	 * re-render so the cursor appears/disappears immediately.
+	 */
+	get focused(): boolean {
+		return this._focused;
+	}
+	set focused(value: boolean) {
+		if (this._focused === value) return;
+		this._focused = value;
+		this.syncBlink();
+		this.tui.requestRender();
+	}
 
 	protected tui: TUI;
 	private theme: EditorTheme;
@@ -350,6 +370,9 @@ export class Editor implements Component, Focusable {
 		this.paddingX = Number.isFinite(paddingX) ? Math.max(0, Math.floor(paddingX)) : 0;
 		const maxVisible = options.autocompleteMaxVisible ?? 5;
 		this.autocompleteMaxVisible = Number.isFinite(maxVisible) ? Math.max(3, Math.min(20, Math.floor(maxVisible))) : 5;
+		// Pause blinking (and hide the cursor) while the terminal window/pane
+		// itself is unfocused, so only the active pane shows a cursor.
+		this.tui.onTerminalFocusChange(() => this.syncBlink());
 	}
 
 	/** Set of currently valid paste IDs, for marker-aware segmentation. */
@@ -479,6 +502,41 @@ export class Editor implements Component, Focusable {
 		// No cached state to invalidate currently
 	}
 
+	/** Start the blink cycle: cursor visible, toggled on a timer. */
+	private startBlink(): void {
+		this.stopBlink(); // clear any existing timer (also resets cursorBlinkOn)
+		this.cursorBlinkOn = true;
+		this.blinkTimer = setInterval(() => {
+			this.cursorBlinkOn = !this.cursorBlinkOn;
+			this.tui.requestRender();
+		}, Editor.BLINK_INTERVAL_MS);
+		// Don't keep the process alive solely for the blink cycle.
+		this.blinkTimer.unref();
+	}
+
+	/** Stop blinking and hide the fake cursor. */
+	private stopBlink(): void {
+		if (this.blinkTimer) {
+			clearInterval(this.blinkTimer);
+			this.blinkTimer = undefined;
+		}
+		this.cursorBlinkOn = false;
+	}
+
+	/**
+	 * (Re)start or stop blinking based on effective focus: the editor must be
+	 * the focused component AND the terminal pane itself must have focus.
+	 * Restarting also resets the blink phase to visible, so this doubles as
+	 * the on-input reset (typing keeps the cursor solid).
+	 */
+	private syncBlink(): void {
+		if (this._focused && this.tui.getTerminalFocused()) {
+			this.startBlink();
+		} else {
+			this.stopBlink();
+		}
+	}
+
 	render(width: number): string[] {
 		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
 		const paddingX = Math.min(this.paddingX, maxPadding);
@@ -530,11 +588,14 @@ export class Editor implements Component, Focusable {
 			result.push(horizontal.repeat(width));
 		}
 
-		// Render each visible layout line
-		// Emit hardware cursor marker when focused so TUI can position the
-		// hardware cursor for IME candidate-window placement even while
-		// autocomplete (e.g. slash-command menu) is visible.
-		const emitCursorMarker = this.focused;
+		// Render each visible layout line.
+		// The fake cursor (reverse-video block) is only drawn while focused and
+		// (unless a hardware cursor is in use) on the visible phase of the blink
+		// cycle. The zero-width hardware-cursor marker is emitted whenever
+		// focused - even mid-blink - so the TUI can keep the terminal cursor
+		// positioned for IME candidate windows.
+		const showFakeCursor =
+			this._focused && this.tui.getTerminalFocused() && (this.tui.getShowHardwareCursor() || this.cursorBlinkOn);
 
 		for (const layoutLine of visibleLines) {
 			let displayText = layoutLine.text;
@@ -542,14 +603,17 @@ export class Editor implements Component, Focusable {
 			let cursorInPadding = false;
 
 			// Add cursor if this line has it
-			if (layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {
+			if (this._focused && layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {
 				const before = displayText.slice(0, layoutLine.cursorPos);
 				const after = displayText.slice(layoutLine.cursorPos);
 
 				// Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
-				const marker = emitCursorMarker ? CURSOR_MARKER : "";
+				const marker = CURSOR_MARKER;
 
-				if (after.length > 0) {
+				if (!showFakeCursor) {
+					// Blink-off phase: marker only, no reverse-video block
+					displayText = before + marker + after;
+				} else if (after.length > 0) {
 					// Cursor is on a character (grapheme) - replace it with highlighted version
 					// Get the first grapheme from 'after'
 					const afterGraphemes = [...this.segment(after, "grapheme")];
@@ -601,6 +665,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
+		this.syncBlink();
 		const kb = getKeybindings();
 
 		// Handle character jump mode (awaiting next character to jump to)

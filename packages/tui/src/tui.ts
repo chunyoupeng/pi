@@ -315,6 +315,8 @@ export class TUI extends Container {
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
 	private stopped = false;
+	private terminalFocused = true; // Terminal window/pane focus (via focus reporting \x1b[?1004h)
+	private terminalFocusListeners = new Set<(focused: boolean) => void>();
 	private pendingOsc11BackgroundReplies = 0;
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
@@ -341,6 +343,23 @@ export class TUI extends Container {
 
 	getShowHardwareCursor(): boolean {
 		return this.showHardwareCursor;
+	}
+
+	/**
+	 * Whether the terminal window/pane containing this TUI has focus.
+	 * Driven by terminal focus reporting (\x1b[I / \x1b[O). Terminals without
+	 * focus-reporting support never send focus-out, so this stays true there.
+	 */
+	getTerminalFocused(): boolean {
+		return this.terminalFocused;
+	}
+
+	/** Subscribe to terminal focus changes. Returns an unsubscribe function. */
+	onTerminalFocusChange(listener: (focused: boolean) => void): () => void {
+		this.terminalFocusListeners.add(listener);
+		return () => {
+			this.terminalFocusListeners.delete(listener);
+		};
 	}
 
 	setShowHardwareCursor(enabled: boolean): void {
@@ -763,6 +782,18 @@ export class TUI extends Container {
 	}
 
 	private handleInput(data: string): void {
+		// Terminal focus reporting (enabled via \x1b[?1004h in Terminal.start())
+		if (data === "\x1b[I" || data === "\x1b[O") {
+			const focused = data === "\x1b[I";
+			if (this.terminalFocused !== focused) {
+				this.terminalFocused = focused;
+				for (const listener of this.terminalFocusListeners) {
+					listener(focused);
+				}
+				this.requestRender();
+			}
+			return;
+		}
 		if (this.consumeOsc11BackgroundResponse(data)) {
 			return;
 		}

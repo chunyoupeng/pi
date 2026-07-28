@@ -811,6 +811,7 @@ describe("Editor component", () => {
 
 			editor.setText("A✅B");
 			// Cursor should be at end (after B)
+			editor.focused = true;
 			const lines = editor.render(width);
 
 			// The cursor (reverse video space) should be visible
@@ -842,6 +843,7 @@ describe("Editor component", () => {
 				const editor = new Editor(createTestTUI(width + paddingX), defaultEditorTheme, { paddingX });
 
 				// Type 9 chars → fills layoutWidth exactly, cursor at end on same line
+				editor.focused = true;
 				for (const ch of "aaaaaaaaa") editor.handleInput(ch);
 				let lines = editor.render(width + paddingX);
 				let contentLines = lines.slice(1, -1);
