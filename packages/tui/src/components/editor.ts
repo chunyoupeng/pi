@@ -233,6 +233,8 @@ export interface EditorTheme {
 export interface EditorOptions {
 	paddingX?: number;
 	autocompleteMaxVisible?: number;
+	/** Prefix rendered before the first line of input (e.g. "❯ "). Wrapped lines are indented to match. */
+	promptPrefix?: string;
 }
 
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
@@ -300,6 +302,7 @@ export class Editor implements Component, Focusable {
 	protected tui: TUI;
 	private theme: EditorTheme;
 	private paddingX: number = 0;
+	private promptPrefix: string = "";
 
 	// Store last render width for cursor navigation
 	private lastWidth: number = 80;
@@ -368,6 +371,7 @@ export class Editor implements Component, Focusable {
 		this.borderColor = theme.borderColor;
 		const paddingX = options.paddingX ?? 0;
 		this.paddingX = Number.isFinite(paddingX) ? Math.max(0, Math.floor(paddingX)) : 0;
+		this.promptPrefix = options.promptPrefix ?? "";
 		const maxVisible = options.autocompleteMaxVisible ?? 5;
 		this.autocompleteMaxVisible = Number.isFinite(maxVisible) ? Math.max(3, Math.min(20, Math.floor(maxVisible))) : 5;
 		// Pause blinking (and hide the cursor) while the terminal window/pane
@@ -538,9 +542,10 @@ export class Editor implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
+		const prefixWidth = this.promptPrefix ? visibleWidth(this.promptPrefix) : 0;
+		const maxPadding = Math.max(0, Math.floor((width - 1 - prefixWidth) / 2));
 		const paddingX = Math.min(this.paddingX, maxPadding);
-		const contentWidth = Math.max(1, width - paddingX * 2);
+		const contentWidth = Math.max(1, width - paddingX * 2 - prefixWidth);
 
 		// Layout width: with padding the cursor can overflow into it,
 		// without padding we reserve 1 column for the cursor.
@@ -597,7 +602,8 @@ export class Editor implements Component, Focusable {
 		const showFakeCursor =
 			this._focused && this.tui.getTerminalFocused() && (this.tui.getShowHardwareCursor() || this.cursorBlinkOn);
 
-		for (const layoutLine of visibleLines) {
+		for (let visibleIndex = 0; visibleIndex < visibleLines.length; visibleIndex++) {
+			const layoutLine = visibleLines[visibleIndex];
 			let displayText = layoutLine.text;
 			let lineVisibleWidth = visibleWidth(layoutLine.text);
 			let cursorInPadding = false;
@@ -639,7 +645,12 @@ export class Editor implements Component, Focusable {
 			const lineRightPadding = cursorInPadding ? rightPadding.slice(1) : rightPadding;
 
 			// Render the line (no side borders, just horizontal lines above and below)
-			result.push(`${leftPadding}${displayText}${padding}${lineRightPadding}`);
+			const linePrefix = prefixWidth
+				? this.scrollOffset + visibleIndex === 0
+					? this.borderColor(this.promptPrefix)
+					: " ".repeat(prefixWidth)
+				: "";
+			result.push(`${leftPadding}${linePrefix}${displayText}${padding}${lineRightPadding}`);
 		}
 
 		// Render bottom border (with scroll indicator if more content below)
@@ -654,10 +665,11 @@ export class Editor implements Component, Focusable {
 		// Add autocomplete list if active
 		if (this.autocompleteState && this.autocompleteList) {
 			const autocompleteResult = this.autocompleteList.render(contentWidth);
+			const autocompleteIndent = " ".repeat(prefixWidth);
 			for (const line of autocompleteResult) {
 				const lineWidth = visibleWidth(line);
 				const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
-				result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
+				result.push(`${leftPadding}${autocompleteIndent}${line}${linePadding}${rightPadding}`);
 			}
 		}
 

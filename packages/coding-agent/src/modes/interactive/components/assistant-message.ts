@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { keyText } from "./keybinding-hints.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -17,6 +18,7 @@ export class AssistantMessageComponent extends Container {
 	private outputPad: number;
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
+	private thinkingExpanded = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -43,6 +45,14 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setExpanded(expanded: boolean): void {
+		if (this.thinkingExpanded === expanded) return;
+		this.thinkingExpanded = expanded;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -130,13 +140,33 @@ export class AssistantMessageComponent extends Container {
 					this.contentContainer.addChild(
 						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0),
 					);
-				} else {
+				} else if (this.thinkingExpanded) {
 					// Render each run of thinking blocks as one Markdown section.
 					this.contentContainer.addChild(
 						new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
 							color: (text: string) => theme.fg("thinkingText", text),
 							italic: true,
 						}),
+					);
+				} else {
+					// Collapsed: one-line preview (latest non-empty line) with an expand hint.
+					const allLines = thinkingBlocks.join("\n").split("\n");
+					let preview = "";
+					for (let j = allLines.length - 1; j >= 0; j--) {
+						const trimmed = allLines[j].trim();
+						if (trimmed) {
+							preview = trimmed;
+							break;
+						}
+					}
+					preview = truncateToWidth(preview, 60, "…");
+					this.contentContainer.addChild(
+						new Text(
+							theme.italic(theme.fg("thinkingText", `${preview} `)) +
+								theme.fg("dim", `(${allLines.length} lines, ${keyText("app.tools.expand")})`),
+							this.outputPad,
+							0,
+						),
 					);
 				}
 				if (hasVisibleContentAfter) {

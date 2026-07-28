@@ -105,6 +105,7 @@ describe("AssistantMessageComponent", () => {
 			"Thinking...",
 			1,
 		);
+		component.setExpanded(true);
 		const lines = component.render(80).map((line) => stripAnsi(line));
 
 		expect(lines.some((line) => line.includes(" hello"))).toBe(true);
