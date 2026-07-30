@@ -21,16 +21,6 @@ function getCellItalic(terminal: VirtualTerminal, row: number, col: number): num
 	return cell.isItalic();
 }
 
-function getCellUnderline(terminal: VirtualTerminal, row: number, col: number): number {
-	const xterm = (terminal as unknown as { xterm: XtermTerminalType }).xterm;
-	const buffer = xterm.buffer.active;
-	const line = buffer.getLine(buffer.viewportY + row);
-	assert.ok(line, `Missing buffer line at row ${row}`);
-	const cell = line.getCell(col);
-	assert.ok(cell, `Missing cell at row ${row} col ${col}`);
-	return cell.isUnderline();
-}
-
 function stripAnsi(line: string): string {
 	return line.replace(/\x1b\[[0-9;]*m/g, "");
 }
@@ -1154,26 +1144,17 @@ bar`,
 			const lines = markdown.render(80);
 			const joinedOutput = lines.join("\n");
 
-			// The heading theme is bold+cyan. After the yellow inline code, the heading
-			// styling (bold+cyan) must be restored so subsequent text is styled correctly.
-			// bold = \x1b[1m, cyan = \x1b[36m, yellow = \x1b[33m
+			// h3 uses magenta; inline code uses yellow.
 			assert.ok(joinedOutput.includes("\x1b[33m"), "Should have yellow for inline code");
 
-			// Find the position of "should not be optional" in the raw output.
-			// It must be preceded by heading style codes (bold+cyan), not appear unstyled.
+			// "should not be optional" must be preceded by the h3 heading color (magenta).
 			const afterCodeIndex = joinedOutput.indexOf("should not be optional");
 			assert.ok(afterCodeIndex > 0, "Should contain text after inline code");
 
-			// Look at the ANSI codes between the code span end and "should not be optional".
-			// There should be bold (\x1b[1m) and cyan (\x1b[36m) re-applied.
 			const precedingChunk = joinedOutput.slice(Math.max(0, afterCodeIndex - 40), afterCodeIndex);
 			assert.ok(
-				precedingChunk.includes("\x1b[1m"),
-				`Should re-apply bold before text after code: ${precedingChunk}`,
-			);
-			assert.ok(
-				precedingChunk.includes("\x1b[36m"),
-				`Should re-apply cyan before text after code: ${precedingChunk}`,
+				precedingChunk.includes("\x1b[35m"),
+				`Should re-apply magenta (h3) before text after code: ${precedingChunk}`,
 			);
 		});
 
@@ -1186,31 +1167,9 @@ bar`,
 			const afterCodeIndex = joinedOutput.indexOf("inside");
 			assert.ok(afterCodeIndex > 0, "Should contain text after inline code");
 
+			// h1 uses cyan.
 			const precedingChunk = joinedOutput.slice(Math.max(0, afterCodeIndex - 40), afterCodeIndex);
-			// H1 uses heading + bold + underline
-			assert.ok(precedingChunk.includes("\x1b[1m"), `Should re-apply bold for h1: ${precedingChunk}`);
-			assert.ok(precedingChunk.includes("\x1b[36m"), `Should re-apply cyan for h1: ${precedingChunk}`);
-			assert.ok(precedingChunk.includes("\x1b[4m"), `Should re-apply underline for h1: ${precedingChunk}`);
-		});
-
-		it("should not leak h1 underline into padding when inline code is the last token", async () => {
-			const markdown = new Markdown("# Important distinction from `open()`", 0, 0, defaultMarkdownTheme);
-			const terminal = new VirtualTerminal(80, 4);
-			const tui = new TUI(terminal);
-			tui.addChild(markdown);
-			tui.start();
-			await terminal.waitForRender();
-
-			const renderedLine = markdown.render(80)[0];
-			assert.ok(renderedLine, "Should render heading line");
-			const contentWidth = renderedLine.replace(/\x1b\[[0-9;]*m/g, "").trimEnd().length;
-			assert.ok(contentWidth > 0, "Should have visible heading content");
-
-			for (let col = contentWidth; col < 80; col++) {
-				assert.strictEqual(getCellUnderline(terminal, 0, col), 0, `Expected no underline in padding at col ${col}`);
-			}
-
-			tui.stop();
+			assert.ok(precedingChunk.includes("\x1b[36m"), `Should re-apply cyan (h1) after code: ${precedingChunk}`);
 		});
 
 		it("should preserve heading styling after bold text", () => {
@@ -1222,9 +1181,30 @@ bar`,
 			const afterBoldIndex = joinedOutput.indexOf("and more");
 			assert.ok(afterBoldIndex > 0, "Should contain text after bold");
 
+			// h2 uses blue; after the inline bold run, the heading color must be restored.
 			const precedingChunk = joinedOutput.slice(Math.max(0, afterBoldIndex - 40), afterBoldIndex);
-			assert.ok(precedingChunk.includes("\x1b[1m"), `Should re-apply bold for h2: ${precedingChunk}`);
-			assert.ok(precedingChunk.includes("\x1b[36m"), `Should re-apply cyan for h2: ${precedingChunk}`);
+			assert.ok(
+				precedingChunk.includes("\x1b[34m"),
+				`Should re-apply blue (h2) before text after bold: ${precedingChunk}`,
+			);
+		});
+
+		it("should render each heading level with its own color and no prefix", () => {
+			const renderRaw = (src: string) => new Markdown(src, 0, 0, defaultMarkdownTheme).render(80).join("");
+			const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+			// h1=cyan, h2=blue, h3=magenta, h4=green, h5=yellow, h6=red
+			assert.ok(renderRaw("# h1").includes("\x1b[36m"), "h1 should use cyan");
+			assert.ok(renderRaw("## h2").includes("\x1b[34m"), "h2 should use blue");
+			assert.ok(renderRaw("### h3").includes("\x1b[35m"), "h3 should use magenta");
+			assert.ok(renderRaw("#### h4").includes("\x1b[32m"), "h4 should use green");
+			assert.ok(renderRaw("##### h5").includes("\x1b[33m"), "h5 should use yellow");
+			assert.ok(renderRaw("###### h6").includes("\x1b[31m"), "h6 should use red");
+
+			// No `#` prefix should be rendered for any level.
+			for (const src of ["# h1", "## h2", "### h3", "#### h4", "##### h5", "###### h6"]) {
+				assert.ok(!plain(renderRaw(src)).includes("#"), `Should not render prefix for ${JSON.stringify(src)}`);
+			}
 		});
 	});
 

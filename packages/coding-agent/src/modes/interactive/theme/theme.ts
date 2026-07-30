@@ -59,6 +59,12 @@ const ThemeJsonSchema = Type.Object({
 		toolOutput: ColorValueSchema,
 		// Markdown (10 colors)
 		mdHeading: ColorValueSchema,
+		mdHeading1: ColorValueSchema,
+		mdHeading2: ColorValueSchema,
+		mdHeading3: ColorValueSchema,
+		mdHeading4: ColorValueSchema,
+		mdHeading5: ColorValueSchema,
+		mdHeading6: ColorValueSchema,
 		mdLink: ColorValueSchema,
 		mdLinkUrl: ColorValueSchema,
 		mdCode: ColorValueSchema,
@@ -124,6 +130,12 @@ export type ThemeColor =
 	| "toolTitle"
 	| "toolOutput"
 	| "mdHeading"
+	| "mdHeading1"
+	| "mdHeading2"
+	| "mdHeading3"
+	| "mdHeading4"
+	| "mdHeading5"
+	| "mdHeading6"
 	| "mdLink"
 	| "mdLinkUrl"
 	| "mdCode"
@@ -1230,6 +1242,14 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 export function getMarkdownTheme(): MarkdownTheme {
 	return {
 		heading: (text: string) => theme.fg("mdHeading", text),
+		headingLevels: [
+			(text: string) => theme.fg("mdHeading1", text),
+			(text: string) => theme.fg("mdHeading2", text),
+			(text: string) => theme.fg("mdHeading3", text),
+			(text: string) => theme.fg("mdHeading4", text),
+			(text: string) => theme.fg("mdHeading5", text),
+			(text: string) => theme.fg("mdHeading6", text),
+		],
 		link: (text: string) => theme.fg("mdLink", text),
 		linkUrl: (text: string) => theme.fg("mdLinkUrl", text),
 		code: (text: string) => theme.fg("mdCode", text),

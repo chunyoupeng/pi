@@ -77,6 +77,8 @@ export interface DefaultTextStyle {
  */
 export interface MarkdownTheme {
 	heading: (text: string) => string;
+	/** Per-level heading styles (index 0 = h1). Falls back to `heading` if absent. */
+	headingLevels?: ((text: string) => string)[];
 	link: (text: string) => string;
 	linkUrl: (text: string) => string;
 	code: (text: string) => string;
@@ -335,26 +337,23 @@ export class Markdown implements Component {
 		switch (token.type) {
 			case "heading": {
 				const headingLevel = token.depth;
-				const headingPrefix = `${"#".repeat(headingLevel)} `;
+
+				// Pick a per-level style function from `headingLevels` (index 0 = h1), falling
+				// back to the single `heading` style. The style function owns the full styling
+				// (color/bold/underline), so the renderer does not impose bold/underline or a
+				// `#` prefix.
+				const headingStyleFn = this.theme.headingLevels?.[headingLevel - 1] ?? this.theme.heading;
 
 				// Build a heading-specific style context so inline tokens (codespan, bold, etc.)
 				// restore heading styling after their own ANSI resets instead of falling back to
 				// the default text style.
-				let headingStyleFn: (text: string) => string;
-				if (headingLevel === 1) {
-					headingStyleFn = (text: string) => this.theme.heading(this.theme.bold(this.theme.underline(text)));
-				} else {
-					headingStyleFn = (text: string) => this.theme.heading(this.theme.bold(text));
-				}
-
 				const headingStyleContext: InlineStyleContext = {
 					applyText: headingStyleFn,
 					stylePrefix: this.getStylePrefix(headingStyleFn),
 				};
 
 				const headingText = this.renderInlineTokens(token.tokens || [], headingStyleContext);
-				const styledHeading = headingLevel >= 3 ? headingStyleFn(headingPrefix) + headingText : headingText;
-				lines.push(styledHeading);
+				lines.push(headingText);
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after headings (unless space token follows)
 				}

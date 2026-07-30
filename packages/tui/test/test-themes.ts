@@ -16,7 +16,15 @@ export const defaultSelectListTheme: SelectListTheme = {
 };
 
 export const defaultMarkdownTheme: MarkdownTheme = {
-	heading: (text: string) => chalk.bold.cyan(text),
+	heading: (text: string) => chalk.cyan(text),
+	headingLevels: [
+		(text: string) => chalk.cyan(text),
+		(text: string) => chalk.blue(text),
+		(text: string) => chalk.magenta(text),
+		(text: string) => chalk.green(text),
+		(text: string) => chalk.yellow(text),
+		(text: string) => chalk.red(text),
+	],
 	link: (text: string) => chalk.blue(text),
 	linkUrl: (text: string) => chalk.dim(text),
 	code: (text: string) => chalk.yellow(text),

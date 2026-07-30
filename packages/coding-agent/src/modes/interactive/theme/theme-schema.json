@@ -59,6 +59,12 @@
 				"toolTitle",
 				"toolOutput",
 				"mdHeading",
+				"mdHeading1",
+				"mdHeading2",
+				"mdHeading3",
+				"mdHeading4",
+				"mdHeading5",
+				"mdHeading6",
 				"mdLink",
 				"mdLinkUrl",
 				"mdCode",
@@ -179,7 +185,31 @@
 				},
 				"mdHeading": {
 					"$ref": "#/$defs/colorValue",
-					"description": "Markdown heading text"
+					"description": "Markdown heading text (fallback for per-level styles, also used for UI section headers)"
+				},
+				"mdHeading1": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown level-1 heading (h1)"
+				},
+				"mdHeading2": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown level-2 heading (h2)"
+				},
+				"mdHeading3": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown level-3 heading (h3)"
+				},
+				"mdHeading4": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown level-4 heading (h4)"
+				},
+				"mdHeading5": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown level-5 heading (h5)"
+				},
+				"mdHeading6": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Markdown level-6 heading (h6)"
 				},
 				"mdLink": {
 					"$ref": "#/$defs/colorValue",

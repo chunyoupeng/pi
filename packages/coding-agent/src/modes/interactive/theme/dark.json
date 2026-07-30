@@ -45,6 +45,12 @@
 		"toolOutput": "gray",
 
 		"mdHeading": "#f0c674",
+		"mdHeading1": "#ff6b6b",
+		"mdHeading2": "#ffa940",
+		"mdHeading3": "#f0c674",
+		"mdHeading4": "#98c379",
+		"mdHeading5": "#61afef",
+		"mdHeading6": "#c678dd",
 		"mdLink": "#81a2be",
 		"mdLinkUrl": "dimGray",
 		"mdCode": "accent",
