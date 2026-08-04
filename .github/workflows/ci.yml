@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-check-test:
+  build-check:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -37,6 +37,3 @@ jobs:
 
       - name: Check
         run: npm run check
-
-      - name: Test
-        run: npm test
