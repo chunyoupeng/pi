@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Interactive tool UI now uses Claude-style framing (`Bash(cmd)`, `Read(path)`, `Write(path)`, `Edit(path)`), 3-line previews with `... N` omission, muted summaries like `12 stdout`, and no success/error background fills (errors use red text).
+- Thinking content is hidden by default; the working indicator and footer show a live `↓` output-token estimate while streaming.
+- Assistant Markdown streaming flushes in throttled / paragraph-sized chunks to reduce flicker.
+
 ## [0.82.1] - 2026-07-25
 
 ### New Features

@@ -6,14 +6,15 @@ import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.ts";
-import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.ts";
+import { keyText } from "../../modes/interactive/components/keybinding-hints.ts";
+import { TOOL_PREVIEW_LINES } from "../../modes/interactive/components/visual-truncate.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { processImage } from "../../utils/image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
-import { getTextOutput, renderToolPath, replaceTabs, str } from "./render-utils.ts";
+import { formatCollapsedOutput, getTextOutput, renderToolPath, replaceTabs, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
@@ -73,7 +74,8 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
 
 function formatReadCall(args: ReadRenderArgs | undefined, theme: Theme, cwd: string): string {
 	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}${formatReadLineRange(args, theme)}`;
+	const range = formatReadLineRange(args, theme);
+	return `${theme.fg("toolTitle", theme.bold("Read("))}${pathDisplay}${range}${theme.fg("toolTitle", theme.bold(")"))}`;
 }
 
 function trimTrailingEmptyLines(lines: string[]): string[] {
@@ -153,10 +155,10 @@ function formatCompactReadCall(
 	}
 
 	return (
-		theme.fg("toolTitle", theme.bold(`read ${classification.kind}`)) +
-		" " +
+		theme.fg("toolTitle", theme.bold(`Read ${classification.kind}(`)) +
 		theme.fg("accent", classification.label) +
 		formatReadLineRange(args, theme) +
+		theme.fg("toolTitle", theme.bold(")")) +
 		expandHint
 	);
 }
@@ -170,21 +172,38 @@ function formatReadResult(
 	_cwd: string,
 	isError: boolean,
 ): string {
-	if (!options.expanded && !isError) {
-		return "";
-	}
-
 	const rawPath = str(args?.file_path ?? args?.path);
 	const output = getTextOutput(result, showImages);
 	const lang = !isError && rawPath ? getLanguageFromPath(rawPath) : undefined;
 	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
 	const lines = trimTrailingEmptyLines(renderedLines);
-	const maxLines = options.expanded ? lines.length : 10;
-	const displayLines = lines.slice(0, maxLines);
-	const remaining = lines.length - maxLines;
-	let text = `\n${displayLines.map((line) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
-	if (remaining > 0) {
-		text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+	const totalLines = lines.length;
+	const styleLine = isError
+		? (line: string) => theme.fg("error", replaceTabs(line))
+		: lang
+			? (line: string) => replaceTabs(line)
+			: (line: string) => theme.fg("toolOutput", replaceTabs(line));
+
+	let text = "";
+	if (isError) {
+		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
+			expanded: options.expanded,
+			maxLines: TOOL_PREVIEW_LINES,
+			styleLine,
+		})}`;
+	} else if (options.expanded) {
+		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
+			expanded: true,
+			styleLine,
+			summary: theme.fg("muted", `${totalLines} lines`),
+		})}`;
+	} else if (totalLines > 0) {
+		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
+			expanded: false,
+			maxLines: TOOL_PREVIEW_LINES,
+			styleLine,
+			summary: theme.fg("muted", `${totalLines} lines`),
+		})}`;
 	}
 
 	const truncation = result.details?.truncation;

@@ -51,6 +51,8 @@ export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	/** Live output tokens from the in-flight assistant turn (not yet persisted). */
+	private liveOutputTokens = 0;
 
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
 		this.session = session;
@@ -63,6 +65,11 @@ export class FooterComponent implements Component {
 
 	setAutoCompactEnabled(enabled: boolean): void {
 		this.autoCompactEnabled = enabled;
+	}
+
+	/** Set live output tokens for the current streaming turn (0 when idle). */
+	setLiveOutputTokens(tokens: number): void {
+		this.liveOutputTokens = Math.max(0, Math.floor(tokens));
 	}
 
 	/**
@@ -128,7 +135,8 @@ export class FooterComponent implements Component {
 		// Build stats line
 		const statsParts = [];
 		if (usageTotals.input) statsParts.push(`↑${formatTokens(usageTotals.input)}`);
-		if (usageTotals.output) statsParts.push(`↓${formatTokens(usageTotals.output)}`);
+		const outputTotal = usageTotals.output + this.liveOutputTokens;
+		if (outputTotal) statsParts.push(`↓${formatTokens(outputTotal)}`);
 		if (usageTotals.cacheRead) statsParts.push(`R${formatTokens(usageTotals.cacheRead)}`);
 		if (usageTotals.cacheWrite) statsParts.push(`W${formatTokens(usageTotals.cacheWrite)}`);
 		if ((usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) && latestCacheHitRate !== undefined) {

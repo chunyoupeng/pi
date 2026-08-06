@@ -1,11 +1,13 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { keyText } from "./keybinding-hints.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+/** Throttle interval for streamed Markdown flushes. */
+const STREAM_FLUSH_MS = 64;
 
 /**
  * Component that renders a complete assistant message
@@ -14,24 +16,25 @@ export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
-	private hiddenThinkingLabel: string;
 	private outputPad: number;
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private thinkingExpanded = false;
+	private streaming = false;
+	private flushTimer: ReturnType<typeof setTimeout> | undefined;
+	private pendingFlush = false;
 
 	constructor(
 		message?: AssistantMessage,
 		hideThinkingBlock = false,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
-		hiddenThinkingLabel = "Thinking...",
+		_hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 	) {
 		super();
 
 		this.hideThinkingBlock = hideThinkingBlock;
 		this.markdownTheme = markdownTheme;
-		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
 
 		// Container for text/thinking content
@@ -46,7 +49,7 @@ export class AssistantMessageComponent extends Container {
 	override invalidate(): void {
 		super.invalidate();
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.applyContent(this.lastMessage);
 		}
 	}
 
@@ -54,28 +57,32 @@ export class AssistantMessageComponent extends Container {
 		if (this.thinkingExpanded === expanded) return;
 		this.thinkingExpanded = expanded;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.applyContent(this.lastMessage);
 		}
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.applyContent(this.lastMessage);
 		}
 	}
 
-	setHiddenThinkingLabel(label: string): void {
-		this.hiddenThinkingLabel = label;
-		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
-		}
-	}
+	/** Kept for API compatibility; thinking body is no longer labeled when hidden. */
+	setHiddenThinkingLabel(_label: string): void {}
 
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
 		if (this.lastMessage) {
-			this.updateContent(this.lastMessage);
+			this.applyContent(this.lastMessage);
+		}
+	}
+
+	/** Mark whether this component is receiving live stream updates. */
+	setStreaming(streaming: boolean): void {
+		this.streaming = streaming;
+		if (!streaming) {
+			this.flushPending(true);
 		}
 	}
 
@@ -90,14 +97,75 @@ export class AssistantMessageComponent extends Container {
 		return lines;
 	}
 
-	updateContent(message: AssistantMessage): void {
+	/**
+	 * Update displayed content. While streaming, flushes are throttled / paragraph-batched.
+	 * Pass force=true (or call setStreaming(false)) to flush immediately.
+	 */
+	updateContent(message: AssistantMessage, force = false): void {
 		this.lastMessage = message;
 
-		// Clear content container
+		if (!this.streaming || force) {
+			this.flushPending(true);
+			this.applyContent(message);
+			return;
+		}
+
+		this.pendingFlush = true;
+		const shouldFlushNow = this.shouldFlushForMessage(message);
+		if (shouldFlushNow) {
+			this.flushPending(true);
+			return;
+		}
+
+		if (this.flushTimer === undefined) {
+			this.flushTimer = setTimeout(() => {
+				this.flushTimer = undefined;
+				this.flushPending(false);
+			}, STREAM_FLUSH_MS);
+		}
+	}
+
+	dispose(): void {
+		if (this.flushTimer !== undefined) {
+			clearTimeout(this.flushTimer);
+			this.flushTimer = undefined;
+		}
+	}
+
+	private shouldFlushForMessage(message: AssistantMessage): boolean {
+		if (message.content.some((c) => c.type === "toolCall")) {
+			return true;
+		}
+		if (message.stopReason === "length" || message.stopReason === "error" || message.stopReason === "aborted") {
+			return true;
+		}
+		const text = message.content
+			.filter((c): c is Extract<typeof c, { type: "text" }> => c.type === "text")
+			.map((c) => c.text)
+			.join("");
+		return text.endsWith("\n\n") || text.endsWith("\n");
+	}
+
+	private flushPending(force: boolean): void {
+		if (this.flushTimer !== undefined) {
+			clearTimeout(this.flushTimer);
+			this.flushTimer = undefined;
+		}
+		if (!this.pendingFlush && !force) {
+			return;
+		}
+		this.pendingFlush = false;
+		if (this.lastMessage) {
+			this.applyContent(this.lastMessage);
+		}
+	}
+
+	private applyContent(message: AssistantMessage): void {
 		this.contentContainer.clear();
 
+		const showThinking = !this.hideThinkingBlock && this.thinkingExpanded;
 		const hasVisibleContent = message.content.some(
-			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
+			(c) => (c.type === "text" && c.text.trim()) || (showThinking && c.type === "thinking" && c.thinking.trim()),
 		);
 
 		if (hasVisibleContent) {
@@ -129,46 +197,22 @@ export class AssistantMessageComponent extends Container {
 					continue;
 				}
 
-				// Add spacing only when another visible assistant content block follows.
-				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
+				// Thinking body is hidden by default. Only show when the user has
+				// disabled hideThinkingBlock and expanded thinking.
+				if (!showThinking) {
+					continue;
+				}
+
 				const hasVisibleContentAfter = message.content
 					.slice(i + 1)
 					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
 
-				if (this.hideThinkingBlock) {
-					// Show one static label for each run of thinking blocks when hidden.
-					this.contentContainer.addChild(
-						new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0),
-					);
-				} else if (this.thinkingExpanded) {
-					// Render each run of thinking blocks as one Markdown section.
-					this.contentContainer.addChild(
-						new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
-							color: (text: string) => theme.fg("thinkingText", text),
-							italic: true,
-						}),
-					);
-				} else {
-					// Collapsed: one-line preview (latest non-empty line) with an expand hint.
-					const allLines = thinkingBlocks.join("\n").split("\n");
-					let preview = "";
-					for (let j = allLines.length - 1; j >= 0; j--) {
-						const trimmed = allLines[j].trim();
-						if (trimmed) {
-							preview = trimmed;
-							break;
-						}
-					}
-					preview = truncateToWidth(preview, 60, "…");
-					this.contentContainer.addChild(
-						new Text(
-							theme.italic(theme.fg("thinkingText", `${preview} `)) +
-								theme.fg("dim", `(${allLines.length} lines, ${keyText("app.tools.expand")})`),
-							this.outputPad,
-							0,
-						),
-					);
-				}
+				this.contentContainer.addChild(
+					new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
+						color: (text: string) => theme.fg("thinkingText", text),
+						italic: true,
+					}),
+				);
 				if (hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));
 				}
@@ -207,4 +251,22 @@ export class AssistantMessageComponent extends Container {
 			}
 		}
 	}
+}
+
+/** Estimate output tokens from streamed assistant content (chars/4 heuristic). */
+export function estimateAssistantOutputTokens(message: AssistantMessage): number {
+	if (message.usage?.output && message.usage.output > 0) {
+		return message.usage.output;
+	}
+	let chars = 0;
+	for (const block of message.content) {
+		if (block.type === "text") {
+			chars += block.text.length;
+		} else if (block.type === "thinking") {
+			chars += block.thinking.length;
+		} else if (block.type === "toolCall") {
+			chars += block.name.length + JSON.stringify(block.arguments ?? {}).length;
+		}
+	}
+	return Math.ceil(chars / 4);
 }

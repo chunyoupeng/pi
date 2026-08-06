@@ -83,3 +83,57 @@ export function renderToolPath(
 	if (!value) return theme.fg("toolOutput", "...");
 	return linkPath(theme.fg("accent", shortenPath(value)), value, cwd);
 }
+
+/** Claude-style tool call header: `Name(args)`. */
+export function formatToolCallHeader(name: string, argsText: string, theme: Theme): string {
+	const args = argsText.trim();
+	const body = args ? `${name}(${args})` : `${name}()`;
+	return theme.fg("toolTitle", theme.bold(body));
+}
+
+export type CollapsedOutputOptions = {
+	/** When true, show all lines (no preview truncation). */
+	expanded?: boolean;
+	/** Max logical lines to show when collapsed. Default 3. */
+	maxLines?: number;
+	/** Take last N lines when collapsed (bash-style). Default: first N. */
+	fromEnd?: boolean;
+	/** Muted summary line after the body, e.g. `12 stdout`. */
+	summary?: string;
+	/** Color each body line. Default: toolOutput. */
+	styleLine?: (line: string) => string;
+};
+
+/**
+ * Claude-style collapsed tool output:
+ * up to N lines, then `... omitted`, then an optional summary.
+ */
+export function formatCollapsedOutput(raw: string, theme: Theme, options: CollapsedOutputOptions = {}): string {
+	const maxLines = options.maxLines ?? 3;
+	const styleLine = options.styleLine ?? ((line: string) => theme.fg("toolOutput", line));
+	const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	const lines = normalized.split("\n");
+	while (lines.length > 0 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	if (lines.length === 0 && !options.summary) {
+		return "";
+	}
+
+	const parts: string[] = [];
+	if (options.expanded || lines.length <= maxLines) {
+		if (lines.length > 0) {
+			parts.push(lines.map(styleLine).join("\n"));
+		}
+	} else {
+		const omitted = lines.length - maxLines;
+		const display = options.fromEnd ? lines.slice(-maxLines) : lines.slice(0, maxLines);
+		parts.push(display.map(styleLine).join("\n"));
+		parts.push(theme.fg("muted", `... ${omitted}`));
+	}
+
+	if (options.summary) {
+		parts.push(options.summary);
+	}
+	return parts.join("\n");
+}

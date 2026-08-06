@@ -1,11 +1,15 @@
 import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.ts";
+import {
+	TOOL_CALL_HEADER_LINES,
+	TOOL_PREVIEW_LINES,
+	truncateToVisualLines,
+	truncateToVisualLinesFromStart,
+} from "../../modes/interactive/components/visual-truncate.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
 import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
@@ -17,7 +21,7 @@ import {
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
-import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
+import { formatCollapsedOutput, formatToolCallHeader, getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
@@ -196,7 +200,7 @@ export interface BashToolOptions {
 	spawnHook?: BashSpawnHook;
 }
 
-const BASH_PREVIEW_LINES = 5;
+const BASH_PREVIEW_LINES = TOOL_PREVIEW_LINES;
 const BASH_UPDATE_THROTTLE_MS = 100;
 
 type BashRenderState = {
@@ -209,6 +213,7 @@ type BashResultRenderState = {
 	cachedWidth: number | undefined;
 	cachedLines: string[] | undefined;
 	cachedSkipped: number | undefined;
+	cachedTotalLines: number | undefined;
 };
 
 class BashResultRenderComponent extends Container {
@@ -216,19 +221,43 @@ class BashResultRenderComponent extends Container {
 		cachedWidth: undefined,
 		cachedLines: undefined,
 		cachedSkipped: undefined,
+		cachedTotalLines: undefined,
 	};
+}
+
+class BashCallHeaderComponent {
+	private header = "";
+
+	setHeader(header: string): void {
+		this.header = header;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return truncateToVisualLinesFromStart(this.header, TOOL_CALL_HEADER_LINES, width).visualLines;
+	}
 }
 
 function formatDuration(ms: number): string {
 	return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function countOutputLines(output: string): number {
+	if (!output) return 0;
+	const lines = output.split("\n");
+	while (lines.length > 0 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	return lines.length;
+}
+
 function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
 	const timeoutSuffix = timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
-	const commandDisplay = command === null ? invalidArgText(theme) : command ? command : theme.fg("toolOutput", "...");
-	return theme.fg("toolTitle", theme.bold(`$ ${commandDisplay}`)) + timeoutSuffix;
+	const commandDisplay = command === null ? invalidArgText(theme) : command ? command : "...";
+	return formatToolCallHeader("Bash", commandDisplay, theme) + timeoutSuffix;
 }
 
 function rebuildBashResultRenderComponent(
@@ -241,6 +270,7 @@ function rebuildBashResultRenderComponent(
 	showImages: boolean,
 	startedAt: number | undefined,
 	endedAt: number | undefined,
+	isError: boolean,
 ): void {
 	const state = component.state;
 	component.clear();
@@ -255,38 +285,52 @@ function rebuildBashResultRenderComponent(
 		}
 	}
 
-	if (output) {
-		const styledOutput = output
-			.split("\n")
-			.map((line) => theme.fg("toolOutput", line))
-			.join("\n");
+	const totalLines = countOutputLines(output);
+	const styleLine = isError
+		? (line: string) => theme.fg("error", line)
+		: (line: string) => theme.fg("toolOutput", line);
+	const summary = isError ? undefined : theme.fg("muted", `${totalLines} stdout`);
 
+	if (output) {
 		if (options.expanded) {
-			component.addChild(new Text(`\n${styledOutput}`, 0, 0));
+			const body = formatCollapsedOutput(output, theme, { expanded: true, summary, styleLine });
+			component.addChild(new Text(`\n${body}`, 0, 0));
 		} else {
 			component.addChild({
 				render: (width: number) => {
-					if (state.cachedLines === undefined || state.cachedWidth !== width) {
-						const preview = truncateToVisualLines(styledOutput, BASH_PREVIEW_LINES, width);
-						state.cachedLines = preview.visualLines;
+					if (
+						state.cachedLines === undefined ||
+						state.cachedWidth !== width ||
+						state.cachedTotalLines !== totalLines
+					) {
+						const preview = truncateToVisualLines(output, BASH_PREVIEW_LINES, width);
+						state.cachedLines = preview.visualLines.map(styleLine);
 						state.cachedSkipped = preview.skippedCount;
 						state.cachedWidth = width;
+						state.cachedTotalLines = totalLines;
 					}
+					const lines: string[] = [""];
 					if (state.cachedSkipped && state.cachedSkipped > 0) {
-						const hint =
-							theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
-							` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
-						return ["", truncateToWidth(hint, width, "..."), ...(state.cachedLines ?? [])];
+						lines.push(...(state.cachedLines ?? []));
+						lines.push(theme.fg("muted", `... ${state.cachedSkipped}`));
+					} else {
+						lines.push(...(state.cachedLines ?? []));
 					}
-					return ["", ...(state.cachedLines ?? [])];
+					if (summary) {
+						lines.push(summary);
+					}
+					return lines;
 				},
 				invalidate: () => {
 					state.cachedWidth = undefined;
 					state.cachedLines = undefined;
 					state.cachedSkipped = undefined;
+					state.cachedTotalLines = undefined;
 				},
 			});
 		}
+	} else if (summary) {
+		component.addChild(new Text(`\n${summary}`, 0, 0));
 	}
 
 	if (truncation?.truncated || fullOutputPath) {
@@ -462,9 +506,12 @@ export function createBashToolDefinition(
 				state.startedAt = Date.now();
 				state.endedAt = undefined;
 			}
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatBashCall(args));
-			return text;
+			const component =
+				context.lastComponent instanceof BashCallHeaderComponent
+					? context.lastComponent
+					: new BashCallHeaderComponent();
+			component.setHeader(formatBashCall(args));
+			return component;
 		},
 		renderResult(result, options, _theme, context) {
 			const state = context.state;
@@ -479,7 +526,8 @@ export function createBashToolDefinition(
 				}
 			}
 			const component =
-				(context.lastComponent as BashResultRenderComponent | undefined) ?? new BashResultRenderComponent();
+				(context.lastComponent instanceof BashResultRenderComponent ? context.lastComponent : undefined) ??
+				new BashResultRenderComponent();
 			rebuildBashResultRenderComponent(
 				component,
 				result as any,
@@ -487,6 +535,7 @@ export function createBashToolDefinition(
 				context.showImages,
 				state.startedAt,
 				state.endedAt,
+				context.isError,
 			);
 			component.invalidate();
 			return component;

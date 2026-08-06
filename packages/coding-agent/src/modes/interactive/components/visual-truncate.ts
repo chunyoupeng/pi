@@ -3,13 +3,27 @@
  * Used by both tool-execution.ts and bash-execution.ts for consistent behavior.
  */
 
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+
+/** Default collapsed preview lines for Claude-style tool output. */
+export const TOOL_PREVIEW_LINES = 3;
+
+/** Default max visual lines for tool call headers like `Bash(cmd)`. */
+export const TOOL_CALL_HEADER_LINES = 3;
 
 export interface VisualTruncateResult {
 	/** The visual lines to display */
 	visualLines: string[];
 	/** Number of visual lines that were skipped (hidden) */
 	skippedCount: number;
+}
+
+function renderVisualLines(text: string, width: number, paddingX: number): string[] {
+	if (!text) {
+		return [];
+	}
+	const tempText = new Text(text, paddingX, 0);
+	return tempText.render(width);
 }
 
 /**
@@ -30,21 +44,38 @@ export function truncateToVisualLines(
 	width: number,
 	paddingX: number = 0,
 ): VisualTruncateResult {
-	if (!text) {
-		return { visualLines: [], skippedCount: 0 };
-	}
-
-	// Create a temporary Text component to render and get visual lines
-	const tempText = new Text(text, paddingX, 0);
-	const allVisualLines = tempText.render(width);
-
+	const allVisualLines = renderVisualLines(text, width, paddingX);
 	if (allVisualLines.length <= maxVisualLines) {
 		return { visualLines: allVisualLines, skippedCount: 0 };
 	}
 
-	// Take the last N visual lines
-	const truncatedLines = allVisualLines.slice(-maxVisualLines);
-	const skippedCount = allVisualLines.length - maxVisualLines;
+	return {
+		visualLines: allVisualLines.slice(-maxVisualLines),
+		skippedCount: allVisualLines.length - maxVisualLines,
+	};
+}
 
-	return { visualLines: truncatedLines, skippedCount };
+/**
+ * Truncate text to a maximum number of visual lines (from the start).
+ */
+export function truncateToVisualLinesFromStart(
+	text: string,
+	maxVisualLines: number,
+	width: number,
+	paddingX: number = 0,
+): VisualTruncateResult {
+	const allVisualLines = renderVisualLines(text, width, paddingX);
+	if (allVisualLines.length <= maxVisualLines) {
+		return { visualLines: allVisualLines, skippedCount: 0 };
+	}
+
+	const truncatedLines = allVisualLines.slice(0, maxVisualLines);
+	if (truncatedLines.length > 0) {
+		const last = truncatedLines[truncatedLines.length - 1]!;
+		truncatedLines[truncatedLines.length - 1] = truncateToWidth(last, Math.max(1, width - paddingX * 2), "…");
+	}
+	return {
+		visualLines: truncatedLines,
+		skippedCount: allVisualLines.length - maxVisualLines,
+	};
 }

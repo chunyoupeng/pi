@@ -3,6 +3,7 @@
  */
 
 import { Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { formatCollapsedOutput } from "../../../core/tools/render-utils.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -11,12 +12,8 @@ import {
 } from "../../../core/tools/truncate.ts";
 import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
-import { keyHint, keyText } from "./keybinding-hints.ts";
-import { truncateToVisualLines } from "./visual-truncate.ts";
-
-// Preview line limit when not expanded (matches tool execution behavior)
-const PREVIEW_LINES = 20;
+import { keyText } from "./keybinding-hints.ts";
+import { TOOL_PREVIEW_LINES, truncateToVisualLines } from "./visual-truncate.ts";
 
 export class BashExecutionComponent extends Container {
 	private command: string;
@@ -28,40 +25,25 @@ export class BashExecutionComponent extends Container {
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
+	private excludeFromContext: boolean;
 
 	constructor(command: string, ui: TUI, excludeFromContext = false) {
 		super();
 		this.command = command;
+		this.excludeFromContext = excludeFromContext;
 
-		// Use dim border for excluded-from-context commands (!! prefix)
-		const colorKey = excludeFromContext ? "dim" : "bashMode";
-		const borderColor = (str: string) => theme.fg(colorKey, str);
-
-		// Add spacer
 		this.addChild(new Spacer(1));
-
-		// Top border
-		this.addChild(new DynamicBorder(borderColor));
-
-		// Content container (holds dynamic content between borders)
 		this.contentContainer = new Container();
 		this.addChild(this.contentContainer);
 
-		// Command header
-		const header = new Text(theme.fg(colorKey, theme.bold(`$ ${command}`)), 1, 0);
-		this.contentContainer.addChild(header);
-
-		// Loader
 		this.loader = new Loader(
 			ui,
-			(spinner) => theme.fg(colorKey, spinner),
+			(spinner) => theme.fg(excludeFromContext ? "dim" : "bashMode", spinner),
 			(text) => theme.fg("muted", text),
-			`Running... (${keyText("tui.select.cancel")} to cancel)`, // Plain text for loader
+			`Running... (${keyText("tui.select.cancel")} to cancel)`,
 		);
-		this.contentContainer.addChild(this.loader);
 
-		// Bottom border
-		this.addChild(new DynamicBorder(borderColor));
+		this.updateDisplay();
 	}
 
 	/**
@@ -126,35 +108,44 @@ export class BashExecutionComponent extends Container {
 
 		// Get the lines to potentially display (after context truncation)
 		const availableLines = contextTruncation.content ? contextTruncation.content.split("\n") : [];
+		while (availableLines.length > 0 && availableLines[availableLines.length - 1] === "") {
+			availableLines.pop();
+		}
 
-		// Apply preview truncation based on expanded state
-		const previewLogicalLines = availableLines.slice(-PREVIEW_LINES);
-		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
-
-		// Rebuild content container
 		this.contentContainer.clear();
 
-		// Command header
-		const header = new Text(theme.fg("bashMode", theme.bold(`$ ${this.command}`)), 1, 0);
-		this.contentContainer.addChild(header);
+		const colorKey = this.excludeFromContext ? "dim" : "bashMode";
+		this.contentContainer.addChild(new Text(theme.fg(colorKey, theme.bold(`Bash(${this.command})`)), 0, 0));
 
-		// Output
+		const outputText = availableLines.join("\n");
+		const totalLines = availableLines.length;
+		const isError = this.status === "error";
+		const styleLine = isError ? (line: string) => theme.fg("error", line) : (line: string) => theme.fg("muted", line);
+
 		if (availableLines.length > 0) {
 			if (this.expanded) {
-				// Show all lines
-				const displayText = availableLines.map((line) => theme.fg("muted", line)).join("\n");
-				this.contentContainer.addChild(new Text(`\n${displayText}`, 1, 0));
+				const body = formatCollapsedOutput(outputText, theme, {
+					expanded: true,
+					styleLine,
+					summary: isError ? undefined : theme.fg("muted", `${totalLines} stdout`),
+				});
+				this.contentContainer.addChild(new Text(`\n${body}`, 0, 0));
 			} else {
-				// Use shared visual truncation utility with width-aware caching
-				const styledOutput = previewLogicalLines.map((line) => theme.fg("muted", line)).join("\n");
-				const styledInput = `\n${styledOutput}`;
 				let cachedWidth: number | undefined;
 				let cachedLines: string[] | undefined;
 				this.contentContainer.addChild({
 					render: (width: number) => {
 						if (cachedLines === undefined || cachedWidth !== width) {
-							const result = truncateToVisualLines(styledInput, PREVIEW_LINES, width, 1);
-							cachedLines = result.visualLines;
+							const preview = truncateToVisualLines(outputText, TOOL_PREVIEW_LINES, width);
+							const lines: string[] = [""];
+							lines.push(...preview.visualLines.map(styleLine));
+							if (preview.skippedCount > 0) {
+								lines.push(theme.fg("muted", `... ${preview.skippedCount}`));
+							}
+							if (!isError) {
+								lines.push(theme.fg("muted", `${totalLines} stdout`));
+							}
+							cachedLines = lines;
 							cachedWidth = width;
 						}
 						return cachedLines ?? [];
@@ -165,41 +156,27 @@ export class BashExecutionComponent extends Container {
 					},
 				});
 			}
+		} else if (this.status !== "running" && !isError) {
+			this.contentContainer.addChild(new Text(`\n${theme.fg("muted", "0 stdout")}`, 0, 0));
 		}
 
-		// Loader or status
 		if (this.status === "running") {
 			this.contentContainer.addChild(this.loader);
 		} else {
 			const statusParts: string[] = [];
-
-			// Show how many lines are hidden (collapsed preview)
-			if (hiddenLineCount > 0) {
-				if (this.expanded) {
-					statusParts.push(
-						`${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to collapse")}${theme.fg("muted", ")")}`,
-					);
-				} else {
-					statusParts.push(
-						`${theme.fg("muted", `... ${hiddenLineCount} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`,
-					);
-				}
-			}
-
 			if (this.status === "cancelled") {
 				statusParts.push(theme.fg("warning", "(cancelled)"));
 			} else if (this.status === "error") {
-				statusParts.push(theme.fg("error", `(exit ${this.exitCode})`));
+				statusParts.push(theme.fg("error", `exit ${this.exitCode}`));
 			}
 
-			// Add truncation warning (context truncation, not preview truncation)
 			const wasTruncated = this.truncationResult?.truncated || contextTruncation.truncated;
 			if (wasTruncated && this.fullOutputPath) {
 				statusParts.push(theme.fg("warning", `Output truncated. Full output: ${this.fullOutputPath}`));
 			}
 
 			if (statusParts.length > 0) {
-				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 1, 0));
+				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 0, 0));
 			}
 		}
 	}

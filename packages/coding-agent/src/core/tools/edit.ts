@@ -4,6 +4,7 @@ import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.ts";
+import { TOOL_PREVIEW_LINES } from "../../modes/interactive/components/visual-truncate.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import {
@@ -21,7 +22,7 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
-import { renderToolPath, str } from "./render-utils.ts";
+import { formatCollapsedOutput, renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
@@ -192,9 +193,10 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 	return null;
 }
 
-function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd: string): string {
+function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd: string, isError = false): string {
 	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
+	const titleColor = isError ? "error" : "toolTitle";
+	return `${theme.fg(titleColor, theme.bold("Edit("))}${pathDisplay}${theme.fg(titleColor, theme.bold(")"))}`;
 }
 
 function formatEditResult(
@@ -226,39 +228,36 @@ function formatEditResult(
 	return undefined;
 }
 
-function getEditHeaderBg(
-	preview: EditPreview | undefined,
-	settledError: boolean | undefined,
-	theme: Theme,
-): (text: string) => string {
-	if (preview) {
-		if ("error" in preview) {
-			return (text: string) => theme.bg("toolErrorBg", text);
-		}
-		return (text: string) => theme.bg("toolSuccessBg", text);
-	}
-	if (settledError) {
-		return (text: string) => theme.bg("toolErrorBg", text);
-	}
-	return (text: string) => theme.bg("toolPendingBg", text);
-}
-
 function buildEditCallComponent(
 	component: EditCallRenderComponent,
 	args: RenderableEditArgs | undefined,
 	theme: Theme,
 	cwd: string,
+	expanded = false,
 ): EditCallRenderComponent {
-	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
+	component.setBgFn(undefined);
 	component.clear();
-	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
+	const isError = Boolean(component.settledError || (component.preview && "error" in component.preview));
+	component.addChild(new Text(formatEditCall(args, theme, cwd, isError), 0, 0));
 
 	if (!component.preview) {
 		return component;
 	}
 
-	const body =
-		"error" in component.preview ? theme.fg("error", component.preview.error) : renderDiff(component.preview.diff);
+	if ("error" in component.preview) {
+		component.addChild(new Spacer(1));
+		component.addChild(new Text(theme.fg("error", component.preview.error), 0, 0));
+		return component;
+	}
+
+	const diffText = renderDiff(component.preview.diff);
+	const diffLines = diffText.split("\n").filter((line, index, arr) => !(index === arr.length - 1 && line === ""));
+	const body = formatCollapsedOutput(diffLines.join("\n"), theme, {
+		expanded,
+		maxLines: TOOL_PREVIEW_LINES,
+		styleLine: (line) => line,
+		summary: theme.fg("muted", `${diffLines.length} lines`),
+	});
 	component.addChild(new Spacer(1));
 	component.addChild(new Text(body, 0, 0));
 	return component;
@@ -385,9 +384,9 @@ export function createEditToolDefinition(
 				});
 			}
 
-			return buildEditCallComponent(component, args, theme, context.cwd);
+			return buildEditCallComponent(component, args, theme, context.cwd, context.expanded);
 		},
-		renderResult(result, _options, theme, context) {
+		renderResult(result, options, theme, context) {
 			const callComponent = context.state.callComponent;
 			const previewInput = getRenderablePreviewInput(context.args as RenderableEditArgs | undefined);
 			const argsKey = previewInput
@@ -415,6 +414,7 @@ export function createEditToolDefinition(
 						context.args as RenderableEditArgs | undefined,
 						theme,
 						context.cwd,
+						options.expanded || context.expanded,
 					);
 				}
 			}

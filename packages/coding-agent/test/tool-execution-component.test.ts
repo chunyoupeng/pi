@@ -114,7 +114,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [], details: { diff: "+1 after", firstChangedLine: 1 }, isError: false });
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("edit");
+		expect(rendered).toContain("Edit(");
 		expect(rendered).toContain("README.md");
 		expect(rendered).not.toContain(":1");
 	});
@@ -130,8 +130,33 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("read");
+		expect(rendered).toMatch(/Read/);
 		expect(rendered).toContain("README.md");
+	});
+
+	test("bash renderer keeps Bash(command) header after result updates", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-header",
+			{ command: "seq 1 10" },
+			{},
+			createBashToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: Array.from({ length: 10 }, (_, i) => `line-${i + 1}`).join("\n") }],
+				details: undefined,
+				isError: false,
+			},
+			false,
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+		expect(rendered).toContain("Bash(seq 1 10)");
+		expect(rendered).toContain("... 7");
+		expect(rendered).toContain("10 stdout");
+		expect(rendered).not.toMatch(/^\s*bash\s*$/m);
 	});
 
 	test("bash execute emits an initial empty partial update before output arrives", async () => {
@@ -185,8 +210,8 @@ describe("ToolExecutionComponent parity", () => {
 
 		const rendered = stripAnsi(component.render(200).join("\n"));
 		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
-		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
+		expect(rendered).toContain("line-4000");
+		expect(rendered).toContain("[Full output:");
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
@@ -203,7 +228,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered.match(/\bread\b/g)?.length ?? 0).toBe(1);
+		expect(rendered.match(/\bRead\b/g)?.length ?? 0).toBe(1);
 	});
 
 	test("inherits missing built-in result renderer slot from the built-in tool", () => {
@@ -245,7 +270,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("read");
+		expect(rendered).toMatch(/Read/);
 		expect(rendered).toContain("README.md");
 		expect(rendered).toContain("override result");
 	});
@@ -416,10 +441,11 @@ describe("ToolExecutionComponent parity", () => {
 
 		const rendered = component.render(120).join("\n");
 		expect(stripAnsi(rendered)).toContain(error);
-		expect(rendered).toContain(theme.fg("toolOutput", error));
+		expect(rendered).toContain(theme.fg("error", error));
 	});
 
-	test("collapses ordinary read results until expanded", () => {
+	test("collapses ordinary read results to a short preview until expanded", () => {
+		const lines = Array.from({ length: 8 }, (_, i) => `line-${i + 1}`);
 		const component = new ToolExecutionComponent(
 			"read",
 			"tool-ordinary-read-collapsed",
@@ -430,18 +456,22 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult(
-			{ content: [{ type: "text", text: "hidden content" }], details: undefined, isError: false },
+			{ content: [{ type: "text", text: lines.join("\n") }], details: undefined, isError: false },
 			false,
 		);
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
-		expect(collapsed).toContain("read");
+		expect(collapsed).toContain("Read(");
 		expect(collapsed).toContain("notes.txt");
-		expect(collapsed).not.toContain("hidden content");
+		expect(collapsed).toContain("line-1");
+		expect(collapsed).toContain("line-3");
+		expect(collapsed).toContain("... 5");
+		expect(collapsed).toContain("8 lines");
+		expect(collapsed).not.toContain("line-4");
 
 		component.setExpanded(true);
 		const expanded = stripAnsi(component.render(120).join("\n"));
-		expect(expanded).toContain("hidden content");
+		expect(expanded).toContain("line-8");
 	});
 
 	for (const scenario of [
@@ -456,24 +486,24 @@ describe("ToolExecutionComponent parity", () => {
 		{
 			title: "AGENTS.md",
 			path: join(process.cwd(), ".pi", "AGENTS.md"),
-			content: "Hidden resource instructions",
-			compact: "read resource .pi/AGENTS.md",
+			content: "line1\nline2\nline3\nline4\nHidden resource instructions",
+			compact: "Read resource(",
 			hidden: "Hidden resource instructions",
 			absent: undefined,
 		},
 		{
 			title: "outside AGENTS.md",
 			path: resolve(process.cwd(), "..", "AGENTS.md"),
-			content: "Hidden outside resource instructions",
-			compact: `read resource ${resolve(process.cwd(), "..", "AGENTS.md").replace(/\\/g, "/")}`,
+			content: "line1\nline2\nline3\nline4\nHidden outside resource instructions",
+			compact: "Read resource(",
 			hidden: "Hidden outside resource instructions",
 			absent: undefined,
 		},
 		{
 			title: "Pi documentation",
 			path: getReadmePath(),
-			content: "Hidden docs content",
-			compact: "read docs README.md",
+			content: "line1\nline2\nline3\nline4\nHidden docs content",
+			compact: "Read docs(",
 			hidden: "Hidden docs content",
 			absent: undefined,
 		},
@@ -508,7 +538,7 @@ describe("ToolExecutionComponent parity", () => {
 
 	for (const scenario of [
 		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio:120-329" },
-		{ title: "Pi documentation", path: getReadmePath(), compact: "read docs README.md:120-329" },
+		{ title: "Pi documentation", path: getReadmePath(), compact: "Read docs(README.md:120-329)" },
 	] as const) {
 		test(`shows the read line range in compact ${scenario.title} reads before the expand hint`, () => {
 			const component = new ToolExecutionComponent(

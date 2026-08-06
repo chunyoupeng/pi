@@ -102,7 +102,7 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { ArminComponent } from "./components/armin.ts";
-import { AssistantMessageComponent } from "./components/assistant-message.ts";
+import { AssistantMessageComponent, estimateAssistantOutputTokens } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
@@ -1896,6 +1896,26 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private updateLiveOutputTokens(message: AssistantMessage): void {
+		const tokens = estimateAssistantOutputTokens(message);
+		this.footer.setLiveOutputTokens(tokens);
+		const tokenLabel = `↓ ${formatTokens(tokens)}`;
+		if (this.activeStatusIndicator?.kind === "working") {
+			this.activeStatusIndicator.setMessage(
+				this.workingMessage ? `${this.workingMessage} ${tokenLabel}` : tokenLabel,
+			);
+		} else if (this.session.isStreaming && this.workingVisible) {
+			this.showStatusIndicator(new WorkingStatusIndicator(this.ui, tokenLabel, this.workingIndicatorOptions));
+		}
+		this.footer.invalidate();
+		this.ui.requestRender();
+	}
+
+	private clearLiveOutputTokens(): void {
+		this.footer.setLiveOutputTokens(0);
+		this.footer.invalidate();
+	}
+
 	private setHiddenThinkingLabel(label?: string): void {
 		this.hiddenThinkingLabel = label ?? this.defaultHiddenThinkingLabel;
 		for (const child of this.chatContainer.children) {
@@ -2920,9 +2940,11 @@ export class InteractiveMode {
 						this.outputPad,
 					);
 					this.streamingComponent.setExpanded(this.toolOutputExpanded);
+					this.streamingComponent.setStreaming(true);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage);
+					this.updateLiveOutputTokens(this.streamingMessage);
 					this.ui.requestRender();
 				}
 				break;
@@ -2931,6 +2953,7 @@ export class InteractiveMode {
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage);
+					this.updateLiveOutputTokens(this.streamingMessage);
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -2975,7 +2998,8 @@ export class InteractiveMode {
 								: "Operation aborted";
 						this.streamingMessage.errorMessage = errorMessage;
 					}
-					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.setStreaming(false);
+					this.streamingComponent.updateContent(this.streamingMessage, true);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -2995,8 +3019,10 @@ export class InteractiveMode {
 						}
 						this.maybeShowCacheMissNotice(this.streamingMessage);
 					}
+					this.streamingComponent.dispose();
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
+					this.clearLiveOutputTokens();
 					this.footer.invalidate();
 				}
 				this.ui.requestRender();
@@ -3055,10 +3081,13 @@ export class InteractiveMode {
 				}
 				this.clearStatusIndicator("working");
 				if (this.streamingComponent) {
+					this.streamingComponent.setStreaming(false);
+					this.streamingComponent.dispose();
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
+				this.clearLiveOutputTokens();
 				this.pendingTools.clear();
 
 				this.ui.requestRender();
