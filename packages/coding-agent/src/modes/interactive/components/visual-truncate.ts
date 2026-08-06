@@ -79,3 +79,37 @@ export function truncateToVisualLinesFromStart(
 		skippedCount: allVisualLines.length - maxVisualLines,
 	};
 }
+
+export interface FoldOptions {
+	/** Horizontal padding the caller will add around each line. */
+	paddingX?: number;
+	/** Keep the last N lines instead of the first N. */
+	fromEnd?: boolean;
+}
+
+/**
+ * Fold text down to a preview of at most `maxVisualLines` rendered lines.
+ *
+ * Folding is measured in visual lines (post-wrap) rather than logical lines so a
+ * preview always occupies the same height regardless of how long each line is.
+ * Hiding a single line would cost as much vertical space to announce as to show,
+ * so that case renders in full instead.
+ */
+export function foldToVisualLines(
+	text: string,
+	maxVisualLines: number,
+	width: number,
+	options: FoldOptions = {},
+): VisualTruncateResult {
+	const paddingX = options.paddingX ?? 0;
+	// Rendering pads every line out to the full width; the caller re-wraps these
+	// lines as text, where that padding would only add trailing blanks.
+	const allVisualLines = renderVisualLines(text, width, paddingX).map((line) => line.trimEnd());
+	if (allVisualLines.length <= maxVisualLines + 1) {
+		return { visualLines: allVisualLines, skippedCount: 0 };
+	}
+	return {
+		visualLines: options.fromEnd ? allVisualLines.slice(-maxVisualLines) : allVisualLines.slice(0, maxVisualLines),
+		skippedCount: allVisualLines.length - maxVisualLines,
+	};
+}

@@ -2,6 +2,8 @@ import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
+import { keyText } from "../../modes/interactive/components/keybinding-hints.ts";
+import { foldToVisualLines, type VisualTruncateResult } from "../../modes/interactive/components/visual-truncate.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
@@ -94,7 +96,7 @@ export function formatToolCallHeader(name: string, argsText: string, theme: Them
 export type CollapsedOutputOptions = {
 	/** When true, show all lines (no preview truncation). */
 	expanded?: boolean;
-	/** Max logical lines to show when collapsed. Default 3. */
+	/** Max lines to show when collapsed. Default 3. */
 	maxLines?: number;
 	/** Take last N lines when collapsed (bash-style). Default: first N. */
 	fromEnd?: boolean;
@@ -102,11 +104,23 @@ export type CollapsedOutputOptions = {
 	summary?: string;
 	/** Color each body line. Default: toolOutput. */
 	styleLine?: (line: string) => string;
+	/**
+	 * Render width. When provided the preview is folded by visual lines, so a
+	 * collapsed block keeps a fixed height even when individual lines wrap.
+	 */
+	width?: number;
 };
+
+/** `… +12 lines (ctrl+o to expand)`, announcing what a collapsed block hides. */
+export function formatOmittedLinesHint(omitted: number, theme: Theme): string {
+	const label = theme.fg("muted", `… +${omitted} ${omitted === 1 ? "line" : "lines"}`);
+	const key = keyText("app.tools.expand");
+	return key ? `${label} ${theme.fg("dim", `(${key} to expand)`)}` : label;
+}
 
 /**
  * Claude-style collapsed tool output:
- * up to N lines, then `... omitted`, then an optional summary.
+ * up to N lines, then the omitted-lines hint, then an optional summary.
  */
 export function formatCollapsedOutput(raw: string, theme: Theme, options: CollapsedOutputOptions = {}): string {
 	const maxLines = options.maxLines ?? 3;
@@ -121,19 +135,45 @@ export function formatCollapsedOutput(raw: string, theme: Theme, options: Collap
 	}
 
 	const parts: string[] = [];
-	if (options.expanded || lines.length <= maxLines) {
+	if (options.expanded) {
 		if (lines.length > 0) {
 			parts.push(lines.map(styleLine).join("\n"));
 		}
 	} else {
-		const omitted = lines.length - maxLines;
-		const display = options.fromEnd ? lines.slice(-maxLines) : lines.slice(0, maxLines);
-		parts.push(display.map(styleLine).join("\n"));
-		parts.push(theme.fg("muted", `... ${omitted}`));
+		// Style before folding: wrapping happens on the styled text, so measuring it
+		// unstyled would mispredict where lines break.
+		const styled = lines.map(styleLine).join("\n");
+		const fold =
+			options.width !== undefined
+				? foldToVisualLines(styled, maxLines, options.width, { fromEnd: options.fromEnd })
+				: foldLogicalLines(styled, maxLines, options.fromEnd);
+		// The hint sits on the side the hidden lines are on, so it reads as a
+		// continuation of the output rather than a footnote in the wrong place.
+		if (fold.skippedCount > 0 && options.fromEnd) {
+			parts.push(formatOmittedLinesHint(fold.skippedCount, theme));
+		}
+		if (fold.visualLines.length > 0) {
+			parts.push(fold.visualLines.join("\n"));
+		}
+		if (fold.skippedCount > 0 && !options.fromEnd) {
+			parts.push(formatOmittedLinesHint(fold.skippedCount, theme));
+		}
 	}
 
 	if (options.summary) {
 		parts.push(options.summary);
 	}
 	return parts.join("\n");
+}
+
+/** Width-unaware fallback used when a caller cannot supply a render width. */
+function foldLogicalLines(styled: string, maxLines: number, fromEnd?: boolean): VisualTruncateResult {
+	const lines = styled.split("\n");
+	if (lines.length <= maxLines + 1) {
+		return { visualLines: lines, skippedCount: 0 };
+	}
+	return {
+		visualLines: fromEnd ? lines.slice(-maxLines) : lines.slice(0, maxLines),
+		skippedCount: lines.length - maxLines,
+	};
 }

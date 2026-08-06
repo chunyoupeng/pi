@@ -4,10 +4,10 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
+import { DynamicText } from "../../modes/interactive/components/dynamic-text.ts";
 import {
 	TOOL_CALL_HEADER_LINES,
 	TOOL_PREVIEW_LINES,
-	truncateToVisualLines,
 	truncateToVisualLinesFromStart,
 } from "../../modes/interactive/components/visual-truncate.ts";
 import { theme } from "../../modes/interactive/theme/theme.ts";
@@ -209,21 +209,7 @@ type BashRenderState = {
 	interval: NodeJS.Timeout | undefined;
 };
 
-type BashResultRenderState = {
-	cachedWidth: number | undefined;
-	cachedLines: string[] | undefined;
-	cachedSkipped: number | undefined;
-	cachedTotalLines: number | undefined;
-};
-
-class BashResultRenderComponent extends Container {
-	state: BashResultRenderState = {
-		cachedWidth: undefined,
-		cachedLines: undefined,
-		cachedSkipped: undefined,
-		cachedTotalLines: undefined,
-	};
-}
+class BashResultRenderComponent extends Container {}
 
 class BashCallHeaderComponent {
 	private header = "";
@@ -272,7 +258,6 @@ function rebuildBashResultRenderComponent(
 	endedAt: number | undefined,
 	isError: boolean,
 ): void {
-	const state = component.state;
 	component.clear();
 
 	let output = getTextOutput(result as any, showImages).trim();
@@ -292,43 +277,19 @@ function rebuildBashResultRenderComponent(
 	const summary = isError ? undefined : theme.fg("muted", `${totalLines} stdout`);
 
 	if (output) {
-		if (options.expanded) {
-			const body = formatCollapsedOutput(output, theme, { expanded: true, summary, styleLine });
-			component.addChild(new Text(`\n${body}`, 0, 0));
-		} else {
-			component.addChild({
-				render: (width: number) => {
-					if (
-						state.cachedLines === undefined ||
-						state.cachedWidth !== width ||
-						state.cachedTotalLines !== totalLines
-					) {
-						const preview = truncateToVisualLines(output, BASH_PREVIEW_LINES, width);
-						state.cachedLines = preview.visualLines.map(styleLine);
-						state.cachedSkipped = preview.skippedCount;
-						state.cachedWidth = width;
-						state.cachedTotalLines = totalLines;
-					}
-					const lines: string[] = [""];
-					if (state.cachedSkipped && state.cachedSkipped > 0) {
-						lines.push(...(state.cachedLines ?? []));
-						lines.push(theme.fg("muted", `... ${state.cachedSkipped}`));
-					} else {
-						lines.push(...(state.cachedLines ?? []));
-					}
-					if (summary) {
-						lines.push(summary);
-					}
-					return lines;
-				},
-				invalidate: () => {
-					state.cachedWidth = undefined;
-					state.cachedLines = undefined;
-					state.cachedSkipped = undefined;
-					state.cachedTotalLines = undefined;
-				},
-			});
-		}
+		component.addChild(
+			new DynamicText(
+				(width) =>
+					`\n${formatCollapsedOutput(output, theme, {
+						expanded: options.expanded,
+						maxLines: BASH_PREVIEW_LINES,
+						fromEnd: true,
+						summary,
+						styleLine,
+						width,
+					})}`,
+			),
+		);
 	} else if (summary) {
 		component.addChild(new Text(`\n${summary}`, 0, 0));
 	}

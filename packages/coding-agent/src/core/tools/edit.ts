@@ -4,6 +4,7 @@ import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.ts";
+import { DynamicText } from "../../modes/interactive/components/dynamic-text.ts";
 import { TOOL_PREVIEW_LINES } from "../../modes/interactive/components/visual-truncate.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
@@ -146,7 +147,8 @@ type EditCallRenderComponent = Box & {
 };
 
 function createEditCallRenderComponent(): EditCallRenderComponent {
-	return Object.assign(new Box(1, 1, (text: string) => text), {
+	// paddingX is 0: the tool-execution gutter supplies the horizontal offset.
+	return Object.assign(new Box(0, 1, (text: string) => text), {
 		preview: undefined as EditPreview | undefined,
 		previewArgsKey: undefined as string | undefined,
 		previewPending: false,
@@ -252,14 +254,18 @@ function buildEditCallComponent(
 
 	const diffText = renderDiff(component.preview.diff);
 	const diffLines = diffText.split("\n").filter((line, index, arr) => !(index === arr.length - 1 && line === ""));
-	const body = formatCollapsedOutput(diffLines.join("\n"), theme, {
-		expanded,
-		maxLines: TOOL_PREVIEW_LINES,
-		styleLine: (line) => line,
-		summary: theme.fg("muted", `${diffLines.length} lines`),
-	});
 	component.addChild(new Spacer(1));
-	component.addChild(new Text(body, 0, 0));
+	component.addChild(
+		new DynamicText((width) =>
+			formatCollapsedOutput(diffLines.join("\n"), theme, {
+				expanded,
+				maxLines: TOOL_PREVIEW_LINES,
+				styleLine: (line) => line,
+				summary: theme.fg("muted", `${diffLines.length} lines`),
+				width,
+			}),
+		),
+	);
 	return component;
 }
 

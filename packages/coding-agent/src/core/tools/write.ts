@@ -3,6 +3,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
 import { type Static, Type } from "typebox";
+import { DynamicText } from "../../modes/interactive/components/dynamic-text.ts";
 import { TOOL_PREVIEW_LINES } from "../../modes/interactive/components/visual-truncate.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
@@ -47,11 +48,11 @@ type WriteHighlightCache = {
 	highlightedLines: string[];
 };
 
-class WriteCallRenderComponent extends Text {
+class WriteCallRenderComponent extends DynamicText {
 	cache?: WriteHighlightCache;
 
 	constructor() {
-		super("", 0, 0);
+		super(undefined, 0, 0);
 	}
 }
 
@@ -134,6 +135,7 @@ function formatWriteCall(
 	theme: Theme,
 	cache: WriteHighlightCache | undefined,
 	cwd: string,
+	width: number,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const fileContent = str(args?.content);
@@ -155,6 +157,7 @@ function formatWriteCall(
 			maxLines: TOOL_PREVIEW_LINES,
 			styleLine,
 			summary: theme.fg("muted", `${totalLines} lines`),
+			width,
 		});
 		if (body) {
 			text += `\n${body}`;
@@ -240,13 +243,14 @@ export function createWriteToolDefinition(
 			} else {
 				component.cache = undefined;
 			}
-			component.setText(
+			component.setBuilder((width) =>
 				formatWriteCall(
 					renderArgs,
 					{ expanded: context.expanded, isPartial: context.isPartial },
 					theme,
 					component.cache,
 					context.cwd,
+					width,
 				),
 			);
 			return component;

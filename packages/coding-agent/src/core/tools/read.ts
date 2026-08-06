@@ -6,6 +6,7 @@ import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.ts";
+import { DynamicText } from "../../modes/interactive/components/dynamic-text.ts";
 import { keyText } from "../../modes/interactive/components/keybinding-hints.ts";
 import { TOOL_PREVIEW_LINES } from "../../modes/interactive/components/visual-truncate.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
@@ -171,6 +172,7 @@ function formatReadResult(
 	showImages: boolean,
 	_cwd: string,
 	isError: boolean,
+	width: number,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const output = getTextOutput(result, showImages);
@@ -190,12 +192,14 @@ function formatReadResult(
 			expanded: options.expanded,
 			maxLines: TOOL_PREVIEW_LINES,
 			styleLine,
+			width,
 		})}`;
 	} else if (options.expanded) {
 		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
 			expanded: true,
 			styleLine,
 			summary: theme.fg("muted", `${totalLines} lines`),
+			width,
 		})}`;
 	} else if (totalLines > 0) {
 		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
@@ -203,6 +207,7 @@ function formatReadResult(
 			maxLines: TOOL_PREVIEW_LINES,
 			styleLine,
 			summary: theme.fg("muted", `${totalLines} lines`),
+			width,
 		})}`;
 	}
 
@@ -356,9 +361,18 @@ export function createReadToolDefinition(
 			return text;
 		},
 		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(
-				formatReadResult(context.args, result, options, theme, context.showImages, context.cwd, context.isError),
+			const text = (context.lastComponent as DynamicText | undefined) ?? new DynamicText();
+			text.setBuilder((width) =>
+				formatReadResult(
+					context.args,
+					result,
+					options,
+					theme,
+					context.showImages,
+					context.cwd,
+					context.isError,
+					width,
+				),
 			);
 			return text;
 		},

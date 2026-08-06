@@ -4,12 +4,11 @@ import { Text } from "@earendil-works/pi-tui";
 import { spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
-import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.ts";
+import { formatOmittedLinesHint, getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
 
@@ -91,7 +90,7 @@ function formatFindResult(
 		const remaining = lines.length - maxLines;
 		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			text += `\n${formatOmittedLinesHint(remaining, theme)}`;
 		}
 	}
 

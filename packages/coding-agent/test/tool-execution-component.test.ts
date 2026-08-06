@@ -154,7 +154,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 		expect(rendered).toContain("Bash(seq 1 10)");
-		expect(rendered).toContain("... 7");
+		expect(rendered).toContain("… +7 lines");
 		expect(rendered).toContain("10 stdout");
 		expect(rendered).not.toMatch(/^\s*bash\s*$/m);
 	});
@@ -465,7 +465,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(collapsed).toContain("notes.txt");
 		expect(collapsed).toContain("line-1");
 		expect(collapsed).toContain("line-3");
-		expect(collapsed).toContain("... 5");
+		expect(collapsed).toContain("… +5 lines");
 		expect(collapsed).toContain("8 lines");
 		expect(collapsed).not.toContain("line-4");
 

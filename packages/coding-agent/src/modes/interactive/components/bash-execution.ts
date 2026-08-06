@@ -12,8 +12,9 @@ import {
 } from "../../../core/tools/truncate.ts";
 import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
+import { DynamicText } from "./dynamic-text.ts";
 import { keyText } from "./keybinding-hints.ts";
-import { TOOL_PREVIEW_LINES, truncateToVisualLines } from "./visual-truncate.ts";
+import { TOOL_PREVIEW_LINES } from "./visual-truncate.ts";
 
 export class BashExecutionComponent extends Container {
 	private command: string;
@@ -123,39 +124,20 @@ export class BashExecutionComponent extends Container {
 		const styleLine = isError ? (line: string) => theme.fg("error", line) : (line: string) => theme.fg("muted", line);
 
 		if (availableLines.length > 0) {
-			if (this.expanded) {
-				const body = formatCollapsedOutput(outputText, theme, {
-					expanded: true,
-					styleLine,
-					summary: isError ? undefined : theme.fg("muted", `${totalLines} stdout`),
-				});
-				this.contentContainer.addChild(new Text(`\n${body}`, 0, 0));
-			} else {
-				let cachedWidth: number | undefined;
-				let cachedLines: string[] | undefined;
-				this.contentContainer.addChild({
-					render: (width: number) => {
-						if (cachedLines === undefined || cachedWidth !== width) {
-							const preview = truncateToVisualLines(outputText, TOOL_PREVIEW_LINES, width);
-							const lines: string[] = [""];
-							lines.push(...preview.visualLines.map(styleLine));
-							if (preview.skippedCount > 0) {
-								lines.push(theme.fg("muted", `... ${preview.skippedCount}`));
-							}
-							if (!isError) {
-								lines.push(theme.fg("muted", `${totalLines} stdout`));
-							}
-							cachedLines = lines;
-							cachedWidth = width;
-						}
-						return cachedLines ?? [];
-					},
-					invalidate: () => {
-						cachedWidth = undefined;
-						cachedLines = undefined;
-					},
-				});
-			}
+			const expanded = this.expanded;
+			this.contentContainer.addChild(
+				new DynamicText(
+					(width) =>
+						`\n${formatCollapsedOutput(outputText, theme, {
+							expanded,
+							maxLines: TOOL_PREVIEW_LINES,
+							fromEnd: true,
+							styleLine,
+							summary: isError ? undefined : theme.fg("muted", `${totalLines} stdout`),
+							width,
+						})}`,
+				),
+			);
 		} else if (this.status !== "running" && !isError) {
 			this.contentContainer.addChild(new Text(`\n${theme.fg("muted", "0 stdout")}`, 0, 0));
 		}

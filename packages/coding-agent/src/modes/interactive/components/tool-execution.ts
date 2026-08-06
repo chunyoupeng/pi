@@ -4,11 +4,18 @@ import { createAllToolDefinitions, type ToolName } from "../../../core/tools/ind
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
+import { Gutter } from "./gutter.ts";
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
 }
+
+/** U+23FA renders as a filled dot on macOS; elsewhere U+25CF is the reliable one. */
+const STATUS_BULLET = process.platform === "darwin" ? "⏺" : "●";
+const RESULT_BRANCH = "⎿";
+const CALL_GUTTER_WIDTH = 2;
+const RESULT_GUTTER_WIDTH = 5;
 
 export class ToolExecutionComponent extends Container {
 	private contentBox: Box;
@@ -32,6 +39,8 @@ export class ToolExecutionComponent extends Container {
 	private cwd: string;
 	private executionStarted = false;
 	private argsComplete = false;
+	private callGutter: Gutter;
+	private resultGutter: Gutter;
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
@@ -66,12 +75,23 @@ export class ToolExecutionComponent extends Container {
 		// selfRenderContainer is used when the tool renders its own framing.
 		// contentText is reserved for generic fallback rendering when no tool definition exists.
 		// No background fills for tools (Claude-style); errors use red foreground text.
-		this.contentBox = new Box(1, 1);
+		// paddingX is 0 because the gutters below own the horizontal offset.
+		this.contentBox = new Box(0, 1);
 		this.contentText = new Text("", 1, 1);
 		this.selfRenderContainer = new Container();
+		this.callGutter = new Gutter({ width: CALL_GUTTER_WIDTH, marker: () => this.renderStatusBullet() });
+		this.resultGutter = new Gutter({
+			width: RESULT_GUTTER_WIDTH,
+			marker: () => `  ${theme.fg("dim", RESULT_BRANCH)}`,
+		});
 
 		if (this.hasRendererDefinition()) {
-			this.addChild(this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox);
+			if (this.getRenderShell() === "self") {
+				this.callGutter.setChild(this.selfRenderContainer);
+				this.addChild(this.callGutter);
+			} else {
+				this.addChild(this.contentBox);
+			}
 		} else {
 			this.addChild(this.contentText);
 		}
@@ -131,6 +151,14 @@ export class ToolExecutionComponent extends Container {
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
 		};
+	}
+
+	/** Bullet colour tracks the call's outcome: pending, failed, or done. */
+	private renderStatusBullet(): string {
+		if (!this.result) {
+			return theme.fg("dim", STATUS_BULLET);
+		}
+		return theme.fg(this.result.isError ? "error" : "success", STATUS_BULLET);
 	}
 
 	private createCallFallback(): Component {
@@ -225,7 +253,7 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
-			const contentLines = this.selfRenderContainer.render(width);
+			const contentLines = this.callGutter.render(width);
 			if (contentLines.length === 0 && this.imageComponents.length === 0) {
 				return [];
 			}
@@ -255,25 +283,45 @@ export class ToolExecutionComponent extends Container {
 		let hasContent = false;
 		this.hideComponent = false;
 		if (this.hasRendererDefinition()) {
-			const renderContainer = this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox;
+			// Tools that frame themselves compose call and result as one block, so they
+			// get a single bullet; default-shell tools get the bullet/branch pair.
+			const selfShell = this.getRenderShell() === "self";
+			const renderContainer = selfShell ? this.selfRenderContainer : this.contentBox;
 			if (renderContainer instanceof Box) {
 				renderContainer.setBgFn(undefined);
 			}
 			renderContainer.clear();
 
+			const addCall = (component: Component): void => {
+				if (selfShell) {
+					this.selfRenderContainer.addChild(component);
+				} else {
+					this.callGutter.setChild(component);
+					this.contentBox.addChild(this.callGutter);
+				}
+			};
+			const addResult = (component: Component): void => {
+				if (selfShell) {
+					this.selfRenderContainer.addChild(component);
+				} else {
+					this.resultGutter.setChild(component);
+					this.contentBox.addChild(this.resultGutter);
+				}
+			};
+
 			const callRenderer = this.getCallRenderer();
 			if (!callRenderer) {
-				renderContainer.addChild(this.createCallFallback());
+				addCall(this.createCallFallback());
 				hasContent = true;
 			} else {
 				try {
 					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
 					this.callRendererComponent = component;
-					renderContainer.addChild(component);
+					addCall(component);
 					hasContent = true;
 				} catch {
 					this.callRendererComponent = undefined;
-					renderContainer.addChild(this.createCallFallback());
+					addCall(this.createCallFallback());
 					hasContent = true;
 				}
 			}
@@ -283,7 +331,7 @@ export class ToolExecutionComponent extends Container {
 				if (!resultRenderer) {
 					const component = this.createResultFallback();
 					if (component) {
-						renderContainer.addChild(component);
+						addResult(component);
 						hasContent = true;
 					}
 				} else {
@@ -295,13 +343,13 @@ export class ToolExecutionComponent extends Container {
 							this.getRenderContext(this.resultRendererComponent),
 						);
 						this.resultRendererComponent = component;
-						renderContainer.addChild(component);
+						addResult(component);
 						hasContent = true;
 					} catch {
 						this.resultRendererComponent = undefined;
 						const component = this.createResultFallback();
 						if (component) {
-							renderContainer.addChild(component);
+							addResult(component);
 							hasContent = true;
 						}
 					}
