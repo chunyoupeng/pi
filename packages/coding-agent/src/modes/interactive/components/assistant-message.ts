@@ -1,6 +1,8 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -17,10 +19,11 @@ export class AssistantMessageComponent extends Container {
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;
+	private markdownTransformers: readonly MarkdownTransformer[];
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private thinkingExpanded = false;
-	private streaming = false;
+	private isStreaming = false;
 	private flushTimer: ReturnType<typeof setTimeout> | undefined;
 	private pendingFlush = false;
 
@@ -30,12 +33,14 @@ export class AssistantMessageComponent extends Container {
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		_hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
+		markdownTransformers: readonly MarkdownTransformer[] = [],
 	) {
 		super();
 
 		this.hideThinkingBlock = hideThinkingBlock;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
+		this.markdownTransformers = markdownTransformers;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -80,7 +85,7 @@ export class AssistantMessageComponent extends Container {
 
 	/** Mark whether this component is receiving live stream updates. */
 	setStreaming(streaming: boolean): void {
-		this.streaming = streaming;
+		this.isStreaming = streaming;
 		if (!streaming) {
 			this.flushPending(true);
 		}
@@ -99,12 +104,13 @@ export class AssistantMessageComponent extends Container {
 
 	/**
 	 * Update displayed content. While streaming, flushes are throttled / paragraph-batched.
-	 * Pass force=true (or call setStreaming(false)) to flush immediately.
+	 * Pass isStreaming=false (or call setStreaming(false)) to flush immediately.
 	 */
-	updateContent(message: AssistantMessage, force = false): void {
+	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
 		this.lastMessage = message;
+		this.isStreaming = isStreaming;
 
-		if (!this.streaming || force) {
+		if (!this.isStreaming) {
 			this.flushPending(true);
 			this.applyContent(message);
 			return;
@@ -178,7 +184,11 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme));
+				this.contentContainer.addChild(
+					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
+						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+					}),
+				);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
@@ -208,10 +218,23 @@ export class AssistantMessageComponent extends Container {
 					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
 
 				this.contentContainer.addChild(
-					new Markdown(thinkingBlocks.join("\n\n"), this.outputPad, 0, this.markdownTheme, {
-						color: (text: string) => theme.fg("thinkingText", text),
-						italic: true,
-					}),
+					new Markdown(
+						thinkingBlocks.join("\n\n"),
+						this.outputPad,
+						0,
+						this.markdownTheme,
+						{
+							color: (text: string) => theme.fg("thinkingText", text),
+							italic: true,
+						},
+						{
+							transform: createMarkdownTransform(
+								"assistant-thinking",
+								this.isStreaming,
+								this.markdownTransformers,
+							),
+						},
+					),
 				);
 				if (hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));
@@ -227,14 +250,7 @@ export class AssistantMessageComponent extends Container {
 		if (message.stopReason === "length") {
 			this.contentContainer.addChild(new Spacer(1));
 			this.contentContainer.addChild(
-				new Text(
-					theme.fg(
-						"error",
-						"Error: Model stopped because it reached the maximum output token limit. The response may be incomplete.",
-					),
-					this.outputPad,
-					0,
-				),
+				new Text(theme.fg("error", "Response was truncated before completion."), this.outputPad, 0),
 			);
 		} else if (!hasToolCalls) {
 			if (message.stopReason === "aborted") {

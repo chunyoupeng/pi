@@ -85,7 +85,7 @@ describe("claude-style tool formatting", () => {
 describe("gutter layout", () => {
 	initTheme("dark");
 
-	const child = (lines: string[]) => ({ render: () => lines });
+	const child = (lines: string[]) => ({ render: () => lines, invalidate: () => {} });
 
 	test("marks the first line and hangs the rest under the content column", () => {
 		const gutter = new Gutter({ width: 5, marker: () => "  ⎿" }, child(["first", "second", "third"]));
@@ -101,6 +101,7 @@ describe("gutter layout", () => {
 					seen = width;
 					return ["x"];
 				},
+				invalidate: () => {},
 			},
 		);
 		gutter.render(40);

@@ -492,6 +492,16 @@ describe("ToolExecutionComponent parity", () => {
 			absent: undefined,
 		},
 		{
+			// The fork's collapsed view previews the first 3 output lines, so the
+			// hidden marker sits past the preview window like the AGENTS.md case.
+			title: "AGENTS.override.md",
+			path: join(process.cwd(), ".pi", "AGENTS.override.md"),
+			content: "line1\nline2\nline3\nline4\nHidden override instructions",
+			compact: "Read resource(",
+			hidden: "Hidden override instructions",
+			absent: undefined,
+		},
+		{
 			title: "outside AGENTS.md",
 			path: resolve(process.cwd(), "..", "AGENTS.md"),
 			content: "line1\nline2\nline3\nline4\nHidden outside resource instructions",
