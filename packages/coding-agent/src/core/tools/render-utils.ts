@@ -100,6 +100,11 @@ export type CollapsedOutputOptions = {
 	maxLines?: number;
 	/** Take last N lines when collapsed (bash-style). Default: first N. */
 	fromEnd?: boolean;
+	/**
+	 * Where to place the omitted-lines hint. Default: same side as the hidden
+	 * lines (before the preview when fromEnd, after otherwise).
+	 */
+	hintPosition?: "before" | "after";
 	/** Muted summary line after the body, e.g. `12 stdout`. */
 	summary?: string;
 	/** Color each body line. Default: toolOutput. */
@@ -147,15 +152,19 @@ export function formatCollapsedOutput(raw: string, theme: Theme, options: Collap
 			options.width !== undefined
 				? foldToVisualLines(styled, maxLines, options.width, { fromEnd: options.fromEnd })
 				: foldLogicalLines(styled, maxLines, options.fromEnd);
-		// The hint sits on the side the hidden lines are on, so it reads as a
-		// continuation of the output rather than a footnote in the wrong place.
-		if (fold.skippedCount > 0 && options.fromEnd) {
+		// The hint sits on the side the hidden lines are on by default, so it reads
+		// as a continuation of the output rather than a footnote in the wrong place.
+		// hintPosition can force it after the preview instead.
+		const showHint = fold.skippedCount > 0;
+		const hintAfter = showHint && (!options.fromEnd || options.hintPosition === "after");
+		const hintBefore = showHint && !hintAfter;
+		if (hintBefore) {
 			parts.push(formatOmittedLinesHint(fold.skippedCount, theme));
 		}
 		if (fold.visualLines.length > 0) {
 			parts.push(fold.visualLines.join("\n"));
 		}
-		if (fold.skippedCount > 0 && !options.fromEnd) {
+		if (hintAfter) {
 			parts.push(formatOmittedLinesHint(fold.skippedCount, theme));
 		}
 	}

@@ -234,15 +234,6 @@ function formatDuration(ms: number): string {
 	return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function countOutputLines(output: string): number {
-	if (!output) return 0;
-	const lines = output.split("\n");
-	while (lines.length > 0 && lines[lines.length - 1] === "") {
-		lines.pop();
-	}
-	return lines.length;
-}
-
 function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
@@ -275,20 +266,20 @@ function rebuildBashResultRenderComponent(
 		}
 	}
 
-	const totalLines = countOutputLines(output);
 	const styleLine = isError
 		? (line: string) => theme.fg("error", line)
 		: (line: string) => theme.fg("toolOutput", line);
-	const summary = isError ? undefined : theme.fg("muted", `${totalLines} stdout`);
-
+	// const summary = isError ? undefined : theme.fg("muted", `${totalLines} stdout`);
+	const summary = "";
 	if (output) {
 		component.addChild(
 			new DynamicText(
 				(width) =>
-					`\n${formatCollapsedOutput(output, theme, {
+					`${formatCollapsedOutput(output, theme, {
 						expanded: options.expanded,
 						maxLines: BASH_PREVIEW_LINES,
 						fromEnd: true,
+						hintPosition: "after",
 						summary,
 						styleLine,
 						width,
@@ -296,7 +287,7 @@ function rebuildBashResultRenderComponent(
 			),
 		);
 	} else if (summary) {
-		component.addChild(new Text(`\n${summary}`, 0, 0));
+		component.addChild(new Text(`${summary}`, 0, 0));
 	}
 
 	if (truncation?.truncated || fullOutputPath) {
@@ -319,7 +310,7 @@ function rebuildBashResultRenderComponent(
 	if (startedAt !== undefined) {
 		const label = options.isPartial ? "Elapsed" : "Took";
 		const endTime = endedAt ?? Date.now();
-		component.addChild(new Text(`\n${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
+		component.addChild(new Text(`${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
 	}
 }
 

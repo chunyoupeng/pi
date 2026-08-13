@@ -245,7 +245,6 @@ function buildEditCallComponent(
 	args: RenderableEditArgs | undefined,
 	theme: Theme,
 	cwd: string,
-	expanded = false,
 ): EditCallRenderComponent {
 	component.setBgFn(undefined);
 	component.clear();
@@ -268,7 +267,7 @@ function buildEditCallComponent(
 	component.addChild(
 		new DynamicText((width) =>
 			formatCollapsedOutput(diffLines.join("\n"), theme, {
-				expanded,
+				expanded: true,
 				maxLines: TOOL_PREVIEW_LINES,
 				styleLine: (line) => line,
 				summary: theme.fg("muted", `${diffLines.length} lines`),
@@ -394,9 +393,9 @@ export function createEditToolDefinition(
 				});
 			}
 
-			return buildEditCallComponent(component, args, theme, context.cwd, context.expanded);
+			return buildEditCallComponent(component, args, theme, context.cwd);
 		},
-		renderResult(result, options, theme, context) {
+		renderResult(result, _options, theme, context) {
 			const callComponent = context.state.callComponent;
 			const previewInput = getRenderablePreviewInput(context.args as RenderableEditArgs | undefined);
 			const argsKey = previewInput
@@ -424,7 +423,6 @@ export function createEditToolDefinition(
 						context.args as RenderableEditArgs | undefined,
 						theme,
 						context.cwd,
-						options.expanded || context.expanded,
 					);
 				}
 			}

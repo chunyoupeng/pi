@@ -69,14 +69,14 @@ export class ToolExecutionComponent extends Container {
 		this.ui = ui;
 		this.cwd = cwd;
 
-		this.addChild(new Spacer(1));
+		// this.addChild(new Spacer(1));
 
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
 		// contentText is reserved for generic fallback rendering when no tool definition exists.
 		// No background fills for tools (Claude-style); errors use red foreground text.
 		// paddingX is 0 because the gutters below own the horizontal offset.
-		this.contentBox = new Box(0, 1);
+		this.contentBox = new Box(0, 0);
 		this.contentText = new Text("", 1, 1);
 		this.selfRenderContainer = new Container();
 		this.callGutter = new Gutter({ width: CALL_GUTTER_WIDTH, marker: () => this.renderStatusBullet() });
@@ -260,7 +260,7 @@ export class ToolExecutionComponent extends Container {
 
 			const lines: string[] = [];
 			if (contentLines.length > 0) {
-				lines.push("");
+				// lines.push("");
 				lines.push(...contentLines);
 			}
 			for (let i = 0; i < this.imageComponents.length; i++) {
