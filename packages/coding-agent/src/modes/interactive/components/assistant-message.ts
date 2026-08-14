@@ -9,7 +9,7 @@ const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
 /** Throttle interval for streamed Markdown flushes. */
-const STREAM_FLUSH_MS = 64;
+const STREAM_FLUSH_MS = 2024;
 const THINKING_OPEN_TAG = "<thinking>";
 const THINKING_CLOSE_TAG = "</thinking>";
 
@@ -186,11 +186,12 @@ export class AssistantMessageComponent extends Container {
 		if (message.stopReason === "length" || message.stopReason === "error" || message.stopReason === "aborted") {
 			return true;
 		}
-		const text = message.content
-			.filter((c): c is Extract<typeof c, { type: "text" }> => c.type === "text")
-			.map((c) => c.text)
-			.join("");
-		return text.endsWith("\n\n") || text.endsWith("\n");
+		// const text = message.content
+		// 	.filter((c): c is Extract<typeof c, { type: "text" }> => c.type === "text")
+		// 	.map((c) => c.text)
+		// 	.join("");
+		// return text.endsWith("\n\n") || text.endsWith("\n");
+		return false;
 	}
 
 	private flushPending(force: boolean): void {
