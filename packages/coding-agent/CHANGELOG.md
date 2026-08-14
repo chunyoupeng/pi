@@ -9,13 +9,15 @@
 ### Changed
 
 - Interactive tool UI now uses Claude-style framing (`Bash(cmd)`, `Read(path)`, `Write(path)`, `Edit(path)`), 3-line previews with `... N` omission, muted summaries like `12 stdout`, and no success/error background fills (errors use red text).
-- Thinking content is hidden by default; the working indicator and footer show a live `↓` output-token estimate while streaming.
+- Thinking content is hidden by default; the working indicator uses an animated accent icon, a randomized short multilingual label, elapsed time, and a per-run cumulative output-token estimate, while the footer shows live output-token usage.
 - Assistant Markdown streaming flushes in throttled / paragraph-sized chunks to reduce flicker.
 - Softened the bash tool's `PI_*` environment guideline in an attempt to reduce unnecessary inspection commands ([#7128](https://github.com/earendil-works/pi/issues/7128)).
 - Reduced worst-case automatic terminal theme detection delay from 200 ms to 100 ms by probing color-scheme and background support concurrently.
 
 ### Fixed
 
+- Fixed interrupting a streaming response from discarding queued steering and follow-up messages instead of continuing with them.
+- Fixed raw `<thinking>...</thinking>` blocks emitted as assistant text appearing in the interactive transcript.
 - Fixed extension TUI method wrappers recursing indefinitely when delegating to the original method ([#7731](https://github.com/earendil-works/pi/issues/7731)).
 - Fixed right-click not pasting clipboard text in fullscreen mode on Windows.
 

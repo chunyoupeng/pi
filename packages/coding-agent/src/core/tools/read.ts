@@ -203,7 +203,6 @@ function formatReadResult(
 		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
 			expanded: true,
 			styleLine,
-			summary: theme.fg("muted", `${totalLines} lines`),
 			width,
 		})}`;
 	} else if (totalLines > 0) {
@@ -211,7 +210,6 @@ function formatReadResult(
 			expanded: false,
 			maxLines: TOOL_PREVIEW_LINES,
 			styleLine,
-			summary: theme.fg("muted", `${totalLines} lines`),
 			width,
 		})}`;
 	}

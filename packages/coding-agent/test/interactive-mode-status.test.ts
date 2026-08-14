@@ -118,6 +118,40 @@ describe("InteractiveMode.showStatus", () => {
 	});
 });
 
+describe("InteractiveMode.interruptStreaming", () => {
+	test("preserves queued messages when interrupting the current response", () => {
+		const agent = {
+			hasQueuedMessages: vi.fn(() => true),
+			abort: vi.fn(),
+		};
+		const fakeThis = {
+			agent,
+			restoreQueuedMessagesToEditor: vi.fn(),
+		};
+
+		(InteractiveMode as any).prototype.interruptStreaming.call(fakeThis);
+
+		expect(agent.abort).toHaveBeenCalledTimes(1);
+		expect(fakeThis.restoreQueuedMessagesToEditor).not.toHaveBeenCalled();
+	});
+
+	test("restores the queue when no queued agent message can continue", () => {
+		const agent = {
+			hasQueuedMessages: vi.fn(() => false),
+			abort: vi.fn(),
+		};
+		const fakeThis = {
+			agent,
+			restoreQueuedMessagesToEditor: vi.fn(),
+		};
+
+		(InteractiveMode as any).prototype.interruptStreaming.call(fakeThis);
+
+		expect(fakeThis.restoreQueuedMessagesToEditor).toHaveBeenCalledWith({ abort: true });
+		expect(agent.abort).not.toHaveBeenCalled();
+	});
+});
+
 describe("InteractiveMode.setToolsExpanded", () => {
 	test("applies expansion state to the active header and chat entries", () => {
 		const header = { setExpanded: vi.fn() };

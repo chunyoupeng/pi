@@ -122,6 +122,47 @@ describe("AgentSession queue characterization", () => {
 		expect(getAssistantTexts(harness)).toContain("saw steer");
 	});
 
+	it("continues with queued steering after the current response is aborted", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		let responseStarted: (() => void) | undefined;
+		const waitForResponseStart = new Promise<void>((resolve) => {
+			responseStarted = resolve;
+		});
+		let sawQueuedSteering = false;
+
+		harness.setResponses([
+			async (_context, options) => {
+				responseStarted?.();
+				await new Promise<void>((resolve) => {
+					if (options?.signal?.aborted) {
+						resolve();
+						return;
+					}
+					options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+				});
+				return fauxAssistantMessage("interrupted");
+			},
+			(context) => {
+				sawQueuedSteering = context.messages.some(
+					(message) => message.role === "user" && getMessageText(message) === "queued steering",
+				);
+				return fauxAssistantMessage("continued");
+			},
+		]);
+
+		const promptPromise = harness.session.prompt("start");
+		await waitForResponseStart;
+		await harness.session.steer("queued steering");
+		harness.session.agent.abort();
+		await promptPromise;
+
+		expect(sawQueuedSteering).toBe(true);
+		expect(getUserTexts(harness)).toEqual(["start", "queued steering"]);
+		expect(getAssistantTexts(harness)).toContain("continued");
+		expect(harness.session.pendingMessageCount).toBe(0);
+	});
+
 	it("delivers follow-up messages only after the current run finishes", async () => {
 		const waiting = await createWaitingHarness();
 		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;

@@ -142,6 +142,7 @@ import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	IdleStatus,
+	pickWorkingMessage,
 	RetryStatusIndicator,
 	type StatusIndicator,
 	WorkingStatusIndicator,
@@ -417,7 +418,7 @@ export class InteractiveMode {
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
-	private readonly defaultWorkingMessage = "Working...";
+	private defaultWorkingMessage = pickWorkingMessage();
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
@@ -434,6 +435,8 @@ export class InteractiveMode {
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
+	private agentStartedAt: number | undefined = undefined;
+	private completedAgentOutputTokens = 0;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -2077,6 +2080,9 @@ export class InteractiveMode {
 					this.ui,
 					this.workingMessage ?? this.defaultWorkingMessage,
 					this.workingIndicatorOptions,
+					this.agentStartedAt === undefined
+						? undefined
+						: { startedAt: this.agentStartedAt, outputTokens: this.completedAgentOutputTokens },
 				),
 			);
 		}
@@ -2091,17 +2097,26 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private updateWorkingOutputTokenLabel(tokens: number): void {
+		if (this.agentStartedAt === undefined) return;
+		const message = this.workingMessage ?? this.defaultWorkingMessage;
+		if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+			this.activeStatusIndicator.setMessage(message);
+			this.activeStatusIndicator.setProgress(this.agentStartedAt, tokens);
+		} else if (this.session.isStreaming && this.workingVisible) {
+			this.showStatusIndicator(
+				new WorkingStatusIndicator(this.ui, message, this.workingIndicatorOptions, {
+					startedAt: this.agentStartedAt,
+					outputTokens: tokens,
+				}),
+			);
+		}
+	}
+
 	private updateLiveOutputTokens(message: AssistantMessage): void {
 		const tokens = estimateAssistantOutputTokens(message);
 		this.footer.setLiveOutputTokens(tokens);
-		const tokenLabel = `↓ ${formatTokens(tokens)}`;
-		if (this.activeStatusIndicator?.kind === "working") {
-			this.activeStatusIndicator.setMessage(
-				this.workingMessage ? `${this.workingMessage} ${tokenLabel}` : tokenLabel,
-			);
-		} else if (this.session.isStreaming && this.workingVisible) {
-			this.showStatusIndicator(new WorkingStatusIndicator(this.ui, tokenLabel, this.workingIndicatorOptions));
-		}
+		this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens + tokens);
 		this.footer.invalidate();
 		this.ui.requestRender();
 	}
@@ -2786,7 +2801,7 @@ export class InteractiveMode {
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
 			if (this.session.isStreaming) {
-				this.restoreQueuedMessagesToEditor({ abort: true });
+				this.interruptStreaming();
 			} else if (this.session.isBashRunning) {
 				this.session.abortBash();
 			} else if (this.isBashMode) {
@@ -3092,6 +3107,9 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.defaultWorkingMessage = pickWorkingMessage();
+				this.agentStartedAt = Date.now();
+				this.completedAgentOutputTokens = 0;
 				this.pendingTools.clear();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -3108,6 +3126,7 @@ export class InteractiveMode {
 							this.ui,
 							this.workingMessage ?? this.defaultWorkingMessage,
 							this.workingIndicatorOptions,
+							{ startedAt: this.agentStartedAt, outputTokens: 0 },
 						),
 					);
 				} else {
@@ -3204,6 +3223,10 @@ export class InteractiveMode {
 
 			case "message_end":
 				if (event.message.role === "user") break;
+				if (event.message.role === "assistant") {
+					this.completedAgentOutputTokens += estimateAssistantOutputTokens(event.message);
+					this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens);
+				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
@@ -3305,6 +3328,7 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.clearLiveOutputTokens();
+				this.agentStartedAt = undefined;
 				this.pendingTools.clear();
 
 				this.ui.requestRender();
@@ -4236,6 +4260,14 @@ export class InteractiveMode {
 			const hintText = theme.fg("dim", `↳ ${dequeueHint} to edit all queued messages`);
 			this.pendingMessagesContainer.addChild(new TruncatedText(hintText, 1, 0));
 		}
+	}
+
+	private interruptStreaming(): void {
+		if (this.agent.hasQueuedMessages()) {
+			this.agent.abort();
+			return;
+		}
+		this.restoreQueuedMessagesToEditor({ abort: true });
 	}
 
 	private restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {

@@ -1,6 +1,9 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, test } from "vitest";
-import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import {
+	AssistantMessageComponent,
+	stripThinkingTagBlocks,
+} from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -72,6 +75,27 @@ describe("AssistantMessageComponent", () => {
 		// Thinking bodies are hidden entirely in this fork (no label).
 		expect(rendered).not.toContain("private reasoning");
 		expect(rendered).toContain("Response was truncated before completion.");
+	});
+
+	test("removes raw thinking-tag blocks emitted as assistant text", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "text", text: "Before <thinking>Run check due code changes</thinking> after." },
+			]),
+			true,
+		);
+		const rendered = stripAnsi(component.render(80).join("\n"));
+
+		expect(rendered).toContain("Before  after.");
+		expect(rendered).not.toContain("thinking");
+		expect(rendered).not.toContain("Run check due code changes");
+	});
+
+	test("suppresses incomplete thinking tags while streaming", () => {
+		expect(stripThinkingTagBlocks("Answer <think", true)).toBe("Answer ");
+		expect(stripThinkingTagBlocks("Answer <thinking>private", true)).toBe("Answer ");
+		expect(stripThinkingTagBlocks("Answer </thinking>done", true)).toBe("Answer done");
 	});
 
 	test("hides adjacent thinking blocks entirely when thinking is hidden", () => {

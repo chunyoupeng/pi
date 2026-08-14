@@ -161,7 +161,6 @@ function formatWriteCall(
 			expanded: options.expanded,
 			maxLines: TOOL_PREVIEW_LINES,
 			styleLine,
-			summary: theme.fg("muted", `${totalLines} lines`),
 			width,
 		});
 		if (body) {

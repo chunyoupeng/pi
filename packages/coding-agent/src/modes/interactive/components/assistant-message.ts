@@ -10,6 +10,47 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 
 /** Throttle interval for streamed Markdown flushes. */
 const STREAM_FLUSH_MS = 64;
+const THINKING_OPEN_TAG = "<thinking>";
+const THINKING_CLOSE_TAG = "</thinking>";
+
+/** Remove raw thinking-tag blocks accidentally emitted as ordinary assistant text. */
+export function stripThinkingTagBlocks(text: string, isStreaming = false): string {
+	const lowerText = text.toLowerCase();
+	let output = "";
+	let cursor = 0;
+
+	while (cursor < text.length) {
+		const openIndex = lowerText.indexOf(THINKING_OPEN_TAG, cursor);
+		const closeIndex = lowerText.indexOf(THINKING_CLOSE_TAG, cursor);
+
+		if (closeIndex !== -1 && (openIndex === -1 || closeIndex < openIndex)) {
+			output += text.slice(cursor, closeIndex);
+			cursor = closeIndex + THINKING_CLOSE_TAG.length;
+			continue;
+		}
+		if (openIndex === -1) {
+			output += text.slice(cursor);
+			break;
+		}
+
+		output += text.slice(cursor, openIndex);
+		const endIndex = lowerText.indexOf(THINKING_CLOSE_TAG, openIndex + THINKING_OPEN_TAG.length);
+		if (endIndex === -1) {
+			return output;
+		}
+		cursor = endIndex + THINKING_CLOSE_TAG.length;
+	}
+
+	if (isStreaming) {
+		const lowerOutput = output.toLowerCase();
+		for (let length = Math.min(THINKING_OPEN_TAG.length - 1, output.length); length > 0; length--) {
+			if (lowerOutput.endsWith(THINKING_OPEN_TAG.slice(0, length))) {
+				return output.slice(0, -length);
+			}
+		}
+	}
+	return output;
+}
 
 /**
  * Component that renders a complete assistant message
@@ -170,8 +211,11 @@ export class AssistantMessageComponent extends Container {
 		this.contentContainer.clear();
 
 		const showThinking = !this.hideThinkingBlock && this.thinkingExpanded;
+		const displayText = (text: string) => stripThinkingTagBlocks(text, this.isStreaming);
 		const hasVisibleContent = message.content.some(
-			(c) => (c.type === "text" && c.text.trim()) || (showThinking && c.type === "thinking" && c.thinking.trim()),
+			(c) =>
+				(c.type === "text" && displayText(c.text).trim()) ||
+				(showThinking && c.type === "thinking" && c.thinking.trim()),
 		);
 
 		if (hasVisibleContent) {
@@ -181,11 +225,13 @@ export class AssistantMessageComponent extends Container {
 		// Render content in order
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
-			if (content.type === "text" && content.text.trim()) {
+			if (content.type === "text") {
+				const text = displayText(content.text).trim();
+				if (!text) continue;
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				this.contentContainer.addChild(
-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
+					new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
 						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
 					}),
 				);
@@ -215,7 +261,10 @@ export class AssistantMessageComponent extends Container {
 
 				const hasVisibleContentAfter = message.content
 					.slice(i + 1)
-					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
+					.some(
+						(c) =>
+							(c.type === "text" && displayText(c.text).trim()) || (c.type === "thinking" && c.thinking.trim()),
+					);
 
 				this.contentContainer.addChild(
 					new Markdown(
