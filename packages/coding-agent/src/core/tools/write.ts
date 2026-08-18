@@ -155,7 +155,6 @@ function formatWriteCall(
 			? (cache?.highlightedLines ?? highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
 			: normalizeDisplayText(fileContent).split("\n");
 		const lines = trimTrailingEmptyLines(renderedLines);
-		const totalLines = lines.length;
 		const styleLine = lang ? (line: string) => line : (line: string) => theme.fg("toolOutput", replaceTabs(line));
 		const body = formatCollapsedOutput(lines.join("\n"), theme, {
 			expanded: options.expanded,

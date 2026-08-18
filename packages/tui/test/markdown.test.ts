@@ -96,10 +96,10 @@ describe("Markdown component", () => {
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 
 			// Check structure
-			assert.ok(plainLines.some((line) => line.includes("- Item 1")));
-			assert.ok(plainLines.some((line) => line.includes("    - Nested 1.1")));
-			assert.ok(plainLines.some((line) => line.includes("    - Nested 1.2")));
-			assert.ok(plainLines.some((line) => line.includes("- Item 2")));
+			assert.ok(plainLines.some((line) => line.includes("• Item 1")));
+			assert.ok(plainLines.some((line) => line.includes("    • Nested 1.1")));
+			assert.ok(plainLines.some((line) => line.includes("    • Nested 1.2")));
+			assert.ok(plainLines.some((line) => line.includes("• Item 2")));
 		});
 
 		it("should render deeply nested list", () => {
@@ -117,10 +117,10 @@ describe("Markdown component", () => {
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 
 			// Check proper indentation
-			assert.ok(plainLines.some((line) => line.includes("- Level 1")));
-			assert.ok(plainLines.some((line) => line.includes("    - Level 2")));
-			assert.ok(plainLines.some((line) => line.includes("        - Level 3")));
-			assert.ok(plainLines.some((line) => line.includes("            - Level 4")));
+			assert.ok(plainLines.some((line) => line.includes("• Level 1")));
+			assert.ok(plainLines.some((line) => line.includes("    • Level 2")));
+			assert.ok(plainLines.some((line) => line.includes("        • Level 3")));
+			assert.ok(plainLines.some((line) => line.includes("            • Level 4")));
 		});
 
 		it("should render ordered nested list", () => {
@@ -195,7 +195,7 @@ describe("Markdown component", () => {
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 
 			assert.ok(plainLines.some((line) => line.includes("1. Ordered item")));
-			assert.ok(plainLines.some((line) => line.includes("    - Unordered nested")));
+			assert.ok(plainLines.some((line) => line.includes("    • Unordered nested")));
 			assert.ok(plainLines.some((line) => line.includes("2. Second ordered")));
 		});
 
@@ -235,7 +235,7 @@ describe("Markdown component", () => {
 
 			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
 
-			assert.deepStrictEqual(lines, ["- [ ] beep", "- [x] boop"]);
+			assert.deepStrictEqual(lines, ["• [ ] beep", "• [x] boop"]);
 		});
 
 		it("should maintain numbering when code blocks are not indented (LLM output)", () => {
@@ -280,7 +280,7 @@ describe("Markdown component", () => {
 
 			const lines = markdown.render(20).map((line) => stripAnsi(line).trimEnd());
 
-			assert.deepStrictEqual(lines, ["- alpha beta gamma", "  delta epsilon"]);
+			assert.deepStrictEqual(lines, ["• alpha beta gamma", "  delta epsilon"]);
 		});
 
 		it("should indent wrapped ordered list lines", () => {
@@ -304,7 +304,7 @@ describe("Markdown component", () => {
 
 			const lines = markdown.render(24).map((line) => stripAnsi(line).trimEnd());
 
-			assert.deepStrictEqual(lines, ["- parent", "    - alpha beta gamma", "      delta epsilon"]);
+			assert.deepStrictEqual(lines, ["• parent", "    • alpha beta gamma", "      delta epsilon"]);
 		});
 
 		it("should indent wrapped nested list lines under ordered parents", () => {
@@ -312,7 +312,7 @@ describe("Markdown component", () => {
 
 			const lines = markdown.render(24).map((line) => stripAnsi(line).trimEnd());
 
-			assert.deepStrictEqual(lines, ["1. parent", "    - alpha beta gamma", "      delta epsilon"]);
+			assert.deepStrictEqual(lines, ["1. parent", "    • alpha beta gamma", "      delta epsilon"]);
 		});
 
 		it("should render and wrap blockquotes inside list items", () => {
@@ -320,7 +320,7 @@ describe("Markdown component", () => {
 
 			const lines = markdown.render(24).map((line) => stripAnsi(line).trimEnd());
 
-			assert.deepStrictEqual(lines, ["- │ alpha beta gamma", "  │ delta epsilon zeta"]);
+			assert.deepStrictEqual(lines, ["• │ alpha beta gamma", "  │ delta epsilon zeta"]);
 		});
 
 		it("should render and wrap code blocks inside list items", () => {
@@ -334,7 +334,7 @@ describe("Markdown component", () => {
 			const lines = markdown.render(24).map((line) => stripAnsi(line).trimEnd());
 
 			// Code fences are not rendered in this fork; only the indented code body remains.
-			assert.deepStrictEqual(lines, ["-   alpha beta gamma", "  delta epsilon zeta"]);
+			assert.deepStrictEqual(lines, ["•   alpha beta gamma", "  delta epsilon zeta"]);
 		});
 	});
 
@@ -686,8 +686,8 @@ describe("Markdown component", () => {
 			// Check heading
 			assert.ok(plainLines.some((line) => line.includes("Test Document")));
 			// Check list
-			assert.ok(plainLines.some((line) => line.includes("- Item 1")));
-			assert.ok(plainLines.some((line) => line.includes("    - Nested item")));
+			assert.ok(plainLines.some((line) => line.includes("• Item 1")));
+			assert.ok(plainLines.some((line) => line.includes("    • Nested item")));
 			// Check table
 			assert.ok(plainLines.some((line) => line.includes("Col1")));
 			assert.ok(plainLines.some((line) => line.includes("│")));
@@ -795,7 +795,7 @@ A=
 			const lines = markdown.render(80).map((line) => stripAnsi(line).trimEnd());
 			const output = lines.join("\n");
 
-			assert.ok(output.includes("- Formula: F₁ = u²"));
+			assert.ok(output.includes("• Formula: F₁ = u²"));
 			assert.ok(output.includes("│ ℂ³"));
 		});
 
@@ -1283,7 +1283,7 @@ bar`,
 				`Missing ordered list item: ${JSON.stringify(quotedLines)}`,
 			);
 			assert.ok(
-				quotedLines.some((line) => line.includes("- nested bullet")),
+				quotedLines.some((line) => line.includes("• nested bullet")),
 				`Missing unordered list item: ${JSON.stringify(quotedLines)}`,
 			);
 		});

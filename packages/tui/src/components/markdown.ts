@@ -766,8 +766,8 @@ export class Markdown implements Component {
 					? (this.getOrderedListMarker(item) ?? `${startNumber + i}. `)
 					: `${startNumber + i}. `
 				: this.options.preserveOrderedListMarkers
-					? (this.getUnorderedListMarker(item) ?? "- ")
-					: "- ";
+					? (this.getUnorderedListMarker(item) ?? "• ")
+					: "• ";
 			const taskMarker = item.task ? `[${item.checked ? "x" : " "}] ` : "";
 			const marker = bullet + taskMarker;
 			const firstPrefix = indent + this.theme.listBullet(marker);
