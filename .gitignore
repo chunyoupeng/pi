@@ -12,6 +12,9 @@ packages/ai/src/providers/data/
 packages/ai/src/providers/.model-generation-*/
 *.cpuprofile
 
+# Local development helpers
+scripts/dev/
+
 # Environment
 .env
 
