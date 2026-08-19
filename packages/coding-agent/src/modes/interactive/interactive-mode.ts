@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, ImageContent, Message, Model, Usage } from "@earendil-works/pi-ai/compat";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -92,7 +92,7 @@ import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
-import type { TuiMode } from "../../core/settings-manager.ts";
+import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -107,7 +107,7 @@ import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
-import { ensureTool } from "../../utils/tools-manager.ts";
+import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent, estimateAssistantOutputTokens } from "./components/assistant-message.ts";
@@ -155,6 +155,7 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { editInExternalEditor } from "./external-editor.ts";
+import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
 import {
 	getAvailableThemes,
@@ -206,10 +207,20 @@ type CompactionQueuedMessage = {
 	mode: "steer" | "followUp";
 };
 
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }>;
+type CompactionCostNotice = {
+	type: "compaction_cost";
+	kind: "compaction" | "branch_summary";
+	usage: Usage;
+};
+
+type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }> | CompactionCostNotice;
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
+}
+
+function isCompactionCostNotice(item: RenderSessionItem): item is CompactionCostNotice {
+	return "type" in item && item.type === "compaction_cost";
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
@@ -257,6 +268,12 @@ export function formatResumeCommand(sessionManager: SessionManager): string | un
 
 function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {
 	return providerId in defaultModelPerProvider;
+}
+
+function llamaCppPostLoginGuidance(actionLabel: string, loadedModelCount: number): string {
+	return loadedModelCount === 0
+		? `${actionLabel}. No llama.cpp models are loaded. Use /llama to load a model, then /model to select it.`
+		: `${actionLabel}. Use /model to select a loaded llama.cpp model, or /llama to manage models.`;
 }
 
 type LoginProviderCompletionOption = {
@@ -332,6 +349,8 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 	/** TUI layout mode. */
 	tuiMode?: TuiMode;
+	/** Initial interactive theme setting for this invocation. */
+	initialThemeSetting?: string;
 }
 
 interface InteractiveTuiOptions {
@@ -346,9 +365,20 @@ interface InteractiveTuiOptions {
 export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScreen | TuiAltScreen {
 	const terminal = options.terminal ?? new ProcessTerminal();
 	if (options.tuiMode === "fullscreen") {
+		const styleSearchMatch = (text: string) => theme.bg("searchMatchBg", theme.fg("searchMatchText", text));
 		return new TuiAltScreen(terminal, options.showHardwareCursor, options.logDirectory, {
+			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
+			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
 			openUrl: openBrowser,
 			onRightClickPaste: options.onRightClickPaste,
+			copySelection: async (text) => {
+				try {
+					await copyToClipboard(text);
+					return true;
+				} catch {
+					return false;
+				}
+			},
 		});
 	}
 	return new TuiMainScreen(terminal, options.showHardwareCursor, options.logDirectory);
@@ -433,6 +463,7 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	private managedToolStatusStarted = false;
 
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
@@ -540,6 +571,7 @@ export class InteractiveMode {
 		});
 		this.runtimeHost.setRebindSession(async () => {
 			await this.rebindCurrentSession({ renderBeforeBind: true });
+			await this.themeController.applyFromSettings();
 		});
 		this.version = VERSION;
 		this.renderer = createInteractiveTui({
@@ -585,12 +617,12 @@ export class InteractiveMode {
 
 		// Register themes from resource loader and initialize
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
-		this.themeController = new InteractiveThemeController(
-			this.ui,
-			this.settingsManager,
-			(message) => this.showError(message),
-			() => this.updateEditorBorderColor(),
-		);
+		this.themeController = new InteractiveThemeController(this.ui, {
+			getSettingsManager: () => this.settingsManager,
+			showError: (message) => this.showError(message),
+			onChanged: () => this.updateEditorBorderColor(),
+			initialThemeSetting: options.initialThemeSetting,
+		});
 	}
 
 	private getAutocompleteSourceTag(sourceInfo?: SourceInfo): string | undefined {
@@ -782,13 +814,13 @@ export class InteractiveMode {
 		}
 	}
 
-	private stopInteractiveTui(): void {
-		if (this.renderer.mode === "fullscreen") {
+	private stopInteractiveTui(fullscreenExitOutput: FullscreenExitOutput): void {
+		if (this.renderer.mode === "fullscreen" && fullscreenExitOutput === "transcript") {
 			while (this.renderer.hasOverlayEntries) this.renderer.hideOverlay();
 			this.switchTuiMode("regular", false, false);
 			this.renderer.renderNow();
 		}
-		this.ui.stop();
+		this.ui.stop({ preserveScreen: this.renderer.mode === "fullscreen" });
 	}
 
 	private switchTuiMode(mode: TuiMode, restoreProgress = true, startRenderer = true): boolean {
@@ -850,11 +882,6 @@ export class InteractiveMode {
 		// Load changelog (only show new entries, skip for resumed sessions)
 		this.changelogMarkdown = this.getChangelogForDisplay();
 
-		// Ensure fd and rg are available (downloads if missing, adds to PATH via getBinDir)
-		// Both are needed: fd for autocomplete, rg for grep tool and bash commands
-		const [fdPath] = await Promise.all([ensureTool("fd"), ensureTool("rg")]);
-		this.fdPath = fdPath;
-
 		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {
 			const modelList = this.session.scopedModels
 				.map((sm) => {
@@ -900,10 +927,11 @@ export class InteractiveMode {
 			this.widgetContainerBelow,
 			this.footerContainer,
 		]);
+		// Accept text while startup completes, but only enable interrupt, exit, and submission feedback.
+		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
+		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
+		this.defaultEditor.onSubmit = (text) => this.handleStartupSubmit(text);
 		this.ui.setFocus(this.editor);
-
-		this.setupKeyHandlers();
-		this.setupEditorSubmitHandler();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
@@ -973,6 +1001,20 @@ export class InteractiveMode {
 		}
 		this.ui.requestRender();
 
+		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
+		// so slow downloads do not make startup appear frozen.
+		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
+		const [fdPath] = await Promise.all([
+			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
+			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
+		]);
+		this.fdPath = fdPath;
+
+		// Enable the remaining input handlers only after managed-tool setup completes.
+		this.setupKeyHandlers();
+		this.setupEditorSubmitHandler();
+		this.ui.requestRender();
+
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
 
@@ -1018,8 +1060,7 @@ export class InteractiveMode {
 		if (!process.env.PI_OFFLINE) {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), 15_000);
-			void this.session.modelRuntime
-				.refresh({ signal: controller.signal })
+			void refreshModelCatalogs(this.session.modelRuntime, controller.signal)
 				.then(() => this.updateAvailableProviderCount())
 				.catch(() => {})
 				.finally(() => clearTimeout(timeout));
@@ -1956,7 +1997,7 @@ export class InteractiveMode {
 		const message = error instanceof Error ? error.message : String(error);
 		this.showError(`${prefix}: ${message}`);
 		stopThemeWatcher();
-		this.stop();
+		this.stop("transcript");
 		process.exit(1);
 	}
 
@@ -2905,6 +2946,11 @@ export class InteractiveMode {
 		}
 	}
 
+	private handleStartupSubmit(text: string): void {
+		this.editor.setText(text);
+		this.showStatus("Startup is still in progress");
+	}
+
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
@@ -3380,8 +3426,13 @@ export class InteractiveMode {
 						this.showStatus("Auto-compaction cancelled");
 					}
 				} else if (event.result) {
+					const entries = this.sessionManager.buildContextEntries();
+					if (entries[0]?.type !== "compaction") {
+						throw new Error("Completed compaction is missing from the session context");
+					}
 					this.chatContainer.clear();
-					this.rebuildChatFromMessages();
+					// The latest compaction is prepended for model context; append it below at its chronological position.
+					this.renderSessionEntries(entries.slice(1));
 					this.addMessageToChat(
 						createCompactionSummaryMessage(
 							event.result.summary,
@@ -3389,6 +3440,13 @@ export class InteractiveMode {
 							new Date().toISOString(),
 						),
 					);
+					if (event.result.usage) {
+						this.addCompactionCostNotice({
+							type: "compaction_cost",
+							kind: "compaction",
+							usage: event.result.usage,
+						});
+					}
 					this.footer.invalidate();
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {
@@ -3467,6 +3525,20 @@ export class InteractiveMode {
 				? [{ type: "text", text: message.content }]
 				: message.content.filter((c: { type: string }) => c.type === "text");
 		return textBlocks.map((c) => (c as { text: string }).text).join("");
+	}
+
+	/** Show a managed-tool status update in the chat. */
+	private showManagedToolStatus(status: ToolStatus): void {
+		if (!this.managedToolStatusStarted) {
+			this.chatContainer.addChild(new Spacer(1));
+			this.managedToolStatusStarted = true;
+		}
+		const message = status.type === "warning" ? `Warning: ${status.message}` : status.message;
+		const color = status.type === "warning" ? "warning" : "dim";
+		this.chatContainer.addChild(new Text(theme.fg(color, message), 1, 0));
+		this.lastStatusSpacer = undefined;
+		this.lastStatusText = undefined;
+		this.ui.requestRender();
 	}
 
 	/**
@@ -3647,6 +3719,10 @@ export class InteractiveMode {
 				this.addCustomEntryToChat(item);
 				continue;
 			}
+			if (isCompactionCostNotice(item)) {
+				this.addCompactionCostNotice(item);
+				continue;
+			}
 
 			const message = item;
 			// Assistant messages need special handling for tool calls
@@ -3724,9 +3800,30 @@ export class InteractiveMode {
 			if (entry.type === "custom") {
 				return [entry];
 			}
-			return sessionEntryToContextMessages(entry);
+			const messages = sessionEntryToContextMessages(entry);
+			if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage && messages.length > 0) {
+				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
+			}
+			return messages;
 		});
 		this.renderSessionItems(items, options);
+	}
+
+	/**
+	 * Render billing usage for a compaction or branch summary. The notice is derived
+	 * from persisted summary usage and is not stored as a separate session entry.
+	 */
+	private addCompactionCostNotice(notice: CompactionCostNotice): void {
+		if (!this.settingsManager.getShowCacheMissNotices()) return;
+
+		const { usage } = notice;
+		const tokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+		const cost = usage.cost.total >= 0.01 ? ` (~$${usage.cost.total.toFixed(2)})` : "";
+		const label = notice.kind === "compaction" ? "Compaction" : "Branch summary";
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(
+			new Text(theme.fg("warning", `${label}: ${formatTokens(tokens)} tokens billed${cost}`), 1, 0),
+		);
 	}
 
 	/**
@@ -3915,7 +4012,7 @@ export class InteractiveMode {
 		try {
 			this.ui.stop();
 		} catch {}
-		console.error("pi exiting due to uncaughtException:");
+		console.error(`${APP_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		process.exit(1);
 	}
@@ -4466,7 +4563,7 @@ export class InteractiveMode {
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getThemeSetting() || "dark",
+					currentTheme: this.themeController.getThemeSelection() || "dark",
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
@@ -4485,6 +4582,7 @@ export class InteractiveMode {
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					tuiMode: this.ui.mode,
+					fullscreenExitOutput: this.settingsManager.getFullscreenExitOutput(),
 					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
 					warnings: this.settingsManager.getWarnings(),
 				},
@@ -4541,7 +4639,7 @@ export class InteractiveMode {
 					},
 					onThemeChange: (themeSetting) => {
 						this.settingsManager.setTheme(themeSetting);
-						void this.themeController.applyFromSettings();
+						void this.themeController.setThemeSetting(themeSetting);
 					},
 					onThemePreview: (themeName) => this.themeController.preview(themeName),
 					onHideThinkingBlockChange: (hidden) => {
@@ -4641,6 +4739,9 @@ export class InteractiveMode {
 						if (!this.activeStatusIndicator) this.statusContainer.clear();
 						this.showStatus(`TUI mode: ${mode}`);
 					},
+					onFullscreenExitOutputChange: (output) => {
+						this.settingsManager.setFullscreenExitOutput(output);
+					},
 					onFullscreenScrollbarChange: (mode) => {
 						this.settingsManager.setFullscreenScrollbar(mode);
 						this.applyFullscreenScrollbarSetting();
@@ -4698,7 +4799,7 @@ export class InteractiveMode {
 			controller.abort();
 		}, 15_000);
 		try {
-			const result = await this.session.modelRuntime.refresh({ signal: controller.signal });
+			const result = await refreshModelCatalogs(this.session.modelRuntime, controller.signal);
 			if (result.aborted && timedOut) {
 				this.showWarning("Model refresh timed out; searching cached models.");
 			} else if (result.errors.size > 0) {
@@ -4795,7 +4896,7 @@ export class InteractiveMode {
 					trustStore.setMany(selection.updates);
 					done();
 					this.showStatus(
-						`Saved trust decision: ${selection.trusted ? "trusted" : "untrusted"}. Restart pi for this to take effect.`,
+						`Saved trust decision: ${selection.trusted ? "trusted" : "untrusted"}. Restart ${APP_NAME} for this to take effect.`,
 					);
 				},
 				onCancel: () => {
@@ -4914,8 +5015,7 @@ export class InteractiveMode {
 					},
 				},
 			);
-			void this.session.modelRuntime
-				.refresh({ signal: controller.signal })
+			void refreshModelCatalogs(this.session.modelRuntime, controller.signal)
 				.then((result) => {
 					if (disposed) return;
 					availableModels = [...this.session.modelRuntime.getAvailableSnapshot()];
@@ -5500,7 +5600,10 @@ export class InteractiveMode {
 		if (isUnknownModel(previousModel)) {
 			const availableModels = this.session.modelRuntime.getAvailableSnapshot();
 			const providerModels = availableModels.filter((model) => model.provider === providerId);
-			if (!hasDefaultModelProvider(providerId)) {
+			// Matches LLAMA_PROVIDER_ID from extensions/llama/provider.ts; kept inline to avoid coupling interactive mode to the built-in extension.
+			if (providerId === "llama.cpp") {
+				selectionError = llamaCppPostLoginGuidance(actionLabel, providerModels.length);
+			} else if (!hasDefaultModelProvider(providerId)) {
 				selectionError = `${actionLabel}, but no default model is configured for provider "${providerId}". Use /model to select a model.`;
 			} else if (providerModels.length === 0) {
 				selectionError = `${actionLabel}, but no models are available for that provider. Use /model to select a model.`;
@@ -5574,7 +5677,11 @@ export class InteractiveMode {
 			providerOption.name,
 			`${providerOption.name} setup`,
 		);
-		dialog.showInfo(`${providerOption.method?.name ?? "Authentication"} is configured outside pi.`, [], true);
+		dialog.showInfo(
+			`${providerOption.method?.name ?? "Authentication"} is configured outside ${APP_NAME}.`,
+			[],
+			true,
+		);
 
 		this.editorContainer.clear();
 		this.editorContainer.addChild(dialog);
@@ -5847,7 +5954,9 @@ export class InteractiveMode {
 				const filePath = this.session.exportToJsonl(outputPath);
 				this.showStatus(`Session exported to: ${filePath}`);
 			} else {
-				const filePath = await this.session.exportToHtml(outputPath);
+				const filePath = await this.session.exportToHtml(outputPath, {
+					themeName: theme.name,
+				});
 				this.showStatus(`Session exported to: ${filePath}`);
 			}
 		} catch (error: unknown) {
@@ -5944,7 +6053,7 @@ export class InteractiveMode {
 		// Export to a temp file
 		const tmpFile = path.join(os.tmpdir(), "session.html");
 		try {
-			await this.session.exportToHtml(tmpFile);
+			await this.session.exportToHtml(tmpFile, { themeName: theme.name });
 		} catch (error: unknown) {
 			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
 			return;
@@ -6449,7 +6558,7 @@ export class InteractiveMode {
 		}
 	}
 
-	stop(): void {
+	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
@@ -6463,7 +6572,7 @@ export class InteractiveMode {
 			this.unsubscribe();
 		}
 		if (this.isInitialized) {
-			this.stopInteractiveTui();
+			this.stopInteractiveTui(fullscreenExitOutput);
 			this.isInitialized = false;
 		}
 		this.unregisterSignalHandlers();

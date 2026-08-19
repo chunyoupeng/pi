@@ -6,6 +6,7 @@ import { type Static, Type } from "typebox";
 import { DynamicText } from "../../modes/interactive/components/dynamic-text.ts";
 import { TOOL_PREVIEW_LINES } from "../../modes/interactive/components/visual-truncate.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { getExperimentalToolSampling } from "../experimental.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
@@ -200,6 +201,7 @@ export function createWriteToolDefinition(
 		promptSnippet: writeToolSystemPromptContribution.snippet,
 		promptGuidelines: [...writeToolSystemPromptContribution.guidelines],
 		parameters: writeSchema,
+		constrainedSampling: getExperimentalToolSampling(),
 		async execute(
 			_toolCallId,
 			{ path, content }: { path: string; content: string },

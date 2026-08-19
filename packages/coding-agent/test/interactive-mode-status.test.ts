@@ -118,6 +118,7 @@ describe("InteractiveMode.showStatus", () => {
 	});
 });
 
+
 describe("InteractiveMode.interruptStreaming", () => {
 	test("preserves queued messages when interrupting the current response", () => {
 		const agent = {
@@ -149,6 +150,30 @@ describe("InteractiveMode.interruptStreaming", () => {
 
 		expect(fakeThis.restoreQueuedMessagesToEditor).toHaveBeenCalledWith({ abort: true });
 		expect(agent.abort).not.toHaveBeenCalled();
+	});
+});
+
+describe("InteractiveMode.showManagedToolStatus", () => {
+	beforeAll(() => initTheme("dark"));
+
+	test("renders tool updates as one contiguous group", () => {
+		const fakeThis: any = {
+			chatContainer: new Container(),
+			ui: { requestRender: vi.fn() },
+			managedToolStatusStarted: false,
+			lastStatusSpacer: undefined,
+			lastStatusText: undefined,
+		};
+		const showManagedToolStatus = (InteractiveMode as any).prototype.showManagedToolStatus;
+
+		showManagedToolStatus.call(fakeThis, { type: "info", message: "fd downloading" });
+		showManagedToolStatus.call(fakeThis, { type: "info", message: "rg downloading" });
+		showManagedToolStatus.call(fakeThis, { type: "warning", message: "rg failed" });
+
+		expect(fakeThis.chatContainer.children).toHaveLength(4);
+		expect(normalizeRenderedOutput(fakeThis.chatContainer)).toBe(
+			"fd downloading\n rg downloading\n Warning: rg failed",
+		);
 	});
 });
 

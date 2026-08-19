@@ -28,6 +28,7 @@ export { readStoredCredential } from "./core/auth-storage.ts";
 export {
 	type BranchPreparation,
 	type BranchSummaryResult,
+	type CacheFriendlySummaryOptions,
 	type CollectEntriesResult,
 	type CompactionResult,
 	type CutPointResult,
@@ -252,6 +253,7 @@ export {
 export {
 	type CompactionSettings,
 	type DefaultProjectTrust,
+	type FullscreenExitOutput,
 	type ImageSettings,
 	type PackageSource,
 	type RetrySettings,
