@@ -144,7 +144,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	/**
-	 * Update displayed content. While streaming, flushes are throttled / paragraph-batched.
+	 * Update displayed content. While streaming, flushes are throttled.
 	 * Pass isStreaming=false (or call setStreaming(false)) to flush immediately.
 	 */
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
