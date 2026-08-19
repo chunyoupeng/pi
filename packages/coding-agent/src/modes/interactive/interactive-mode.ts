@@ -142,6 +142,7 @@ import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	IdleStatus,
+	pickCookedIcon,
 	pickCookedMessage,
 	pickWorkingMessage,
 	RetryStatusIndicator,
@@ -3335,7 +3336,7 @@ export class InteractiveMode {
 						const elapsedSeconds = elapsedMs / 1000;
 						const tokensPerSecond = this.completedAgentOutputTokens / elapsedSeconds;
 						this.showStatus(
-							`✶ ${pickCookedMessage()} ${elapsedSeconds.toFixed(1)}s · ${tokensPerSecond.toFixed(1)} tok/s`,
+							`${pickCookedIcon()} ${pickCookedMessage()} ${elapsedSeconds.toFixed(1)}s · ${tokensPerSecond.toFixed(1)} tok/s`,
 						);
 					}
 				}

@@ -63,6 +63,13 @@ export function pickCookedMessage(random: () => number = Math.random): string {
 	return DEFAULT_COOKED_MESSAGES[Math.floor(random() * DEFAULT_COOKED_MESSAGES.length)] ?? DEFAULT_COOKED_MESSAGES[0];
 }
 
+/** Random icons for the end-of-turn notification. */
+export const DEFAULT_COOKED_ICONS = ["✶", "✓", "◆", "❖", "✪", "✴", "✠", "⚑", "☑"] as const;
+
+export function pickCookedIcon(random: () => number = Math.random): string {
+	return DEFAULT_COOKED_ICONS[Math.floor(random() * DEFAULT_COOKED_ICONS.length)] ?? DEFAULT_COOKED_ICONS[0];
+}
+
 export function formatElapsedTime(totalSeconds: number): string {
 	const seconds = Math.max(0, Math.floor(totalSeconds));
 	const hours = Math.floor(seconds / 3600);
