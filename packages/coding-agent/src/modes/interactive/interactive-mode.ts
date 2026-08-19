@@ -142,6 +142,7 @@ import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	IdleStatus,
+	pickCookedMessage,
 	pickWorkingMessage,
 	RetryStatusIndicator,
 	type StatusIndicator,
@@ -3328,6 +3329,16 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.clearLiveOutputTokens();
+				if (this.agentStartedAt !== undefined && this.completedAgentOutputTokens > 0) {
+					const elapsedMs = Date.now() - this.agentStartedAt;
+					if (elapsedMs > 0) {
+						const elapsedSeconds = elapsedMs / 1000;
+						const tokensPerSecond = this.completedAgentOutputTokens / elapsedSeconds;
+						this.showStatus(
+							`✶ ${pickCookedMessage()} ${elapsedSeconds.toFixed(1)}s · ${tokensPerSecond.toFixed(1)} tok/s`,
+						);
+					}
+				}
 				this.agentStartedAt = undefined;
 				this.pendingTools.clear();
 

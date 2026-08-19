@@ -40,6 +40,29 @@ export function pickWorkingMessage(random: () => number = Math.random): string {
 	);
 }
 
+/** Random show-off words for the end-of-turn tokens-per-second notification. */
+export const DEFAULT_COOKED_MESSAGES = [
+	"出锅",
+	"大成",
+	"圆满",
+	"Served",
+	"Forged",
+	"Manifest",
+	"Accompli",
+	"Compiuto",
+	"Servido",
+	"Confectum",
+	"Telos",
+	"Siddham",
+	"Kansei",
+	"Zenith",
+	"Omega",
+] as const;
+
+export function pickCookedMessage(random: () => number = Math.random): string {
+	return DEFAULT_COOKED_MESSAGES[Math.floor(random() * DEFAULT_COOKED_MESSAGES.length)] ?? DEFAULT_COOKED_MESSAGES[0];
+}
+
 export function formatElapsedTime(totalSeconds: number): string {
 	const seconds = Math.max(0, Math.floor(totalSeconds));
 	const hours = Math.floor(seconds / 3600);
