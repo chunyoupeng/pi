@@ -118,7 +118,6 @@ describe("InteractiveMode.showStatus", () => {
 	});
 });
 
-
 describe("InteractiveMode.interruptStreaming", () => {
 	test("preserves queued messages when interrupting the current response", () => {
 		const agent = {

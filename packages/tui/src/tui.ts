@@ -855,7 +855,12 @@ export abstract class TuiBase extends Container implements TUI {
 				for (const listener of this.terminalFocusListeners) {
 					listener(focused);
 				}
-				this.requestRender();
+				// Only repaint when something actually consumes focus changes
+				// (e.g. the editor's cursor blink). Without listeners a focus
+				// event cannot change any rendered state, so don't emit a frame.
+				if (this.terminalFocusListeners.size > 0) {
+					this.requestRender();
+				}
 			}
 		}
 		if (this.consumeOsc11BackgroundResponse(data)) {
