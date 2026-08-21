@@ -107,6 +107,11 @@ export type CollapsedOutputOptions = {
 	hintPosition?: "before" | "after";
 	/** Muted summary line after the body, e.g. `12 stdout`. */
 	summary?: string;
+	/**
+	 * Muted note that shares the omitted-lines hint line when present,
+	 * e.g. `… +12 lines (ctrl+o to expand) · Took 1.2s`; otherwise its own final line.
+	 */
+	trailingNote?: string;
 	/** Color each body line. Default: toolOutput. */
 	styleLine?: (line: string) => string;
 	/**
@@ -135,14 +140,18 @@ export function formatCollapsedOutput(raw: string, theme: Theme, options: Collap
 	while (lines.length > 0 && lines[lines.length - 1] === "") {
 		lines.pop();
 	}
-	if (lines.length === 0 && !options.summary) {
+	if (lines.length === 0 && !options.summary && !options.trailingNote) {
 		return "";
 	}
 
+	const note = options.trailingNote ? theme.fg("muted", options.trailingNote) : undefined;
 	const parts: string[] = [];
 	if (options.expanded) {
 		if (lines.length > 0) {
 			parts.push(lines.map(styleLine).join("\n"));
+		}
+		if (note) {
+			parts.push(note);
 		}
 	} else {
 		// Style before folding: wrapping happens on the styled text, so measuring it
@@ -165,7 +174,13 @@ export function formatCollapsedOutput(raw: string, theme: Theme, options: Collap
 			parts.push(fold.visualLines.join("\n"));
 		}
 		if (hintAfter) {
-			parts.push(formatOmittedLinesHint(fold.skippedCount, theme));
+			parts.push(
+				note
+					? `${formatOmittedLinesHint(fold.skippedCount, theme)}${theme.fg("dim", " · ")}${note}`
+					: formatOmittedLinesHint(fold.skippedCount, theme),
+			);
+		} else if (note) {
+			parts.push(note);
 		}
 	}
 

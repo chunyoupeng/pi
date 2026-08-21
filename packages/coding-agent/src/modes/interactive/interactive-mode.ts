@@ -143,6 +143,7 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
+	formatElapsedTime,
 	IdleStatus,
 	pickCookedIcon,
 	pickCookedMessage,
@@ -478,6 +479,7 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	private addToolOutputDividerBeforeNextAssistant = false;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -3202,6 +3204,7 @@ export class InteractiveMode {
 				this.agentStartedAt = Date.now();
 				this.completedAgentOutputTokens = 0;
 				this.pendingTools.clear();
+				this.addToolOutputDividerBeforeNextAssistant = false;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3278,6 +3281,14 @@ export class InteractiveMode {
 
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
+					if (
+						this.addToolOutputDividerBeforeNextAssistant &&
+						this.hasVisibleAssistantText(event.message) &&
+						!event.message.content.some((content) => content.type === "toolCall")
+					) {
+						this.addToolOutputDividerBefore(this.streamingComponent);
+						this.addToolOutputDividerBeforeNextAssistant = false;
+					}
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.updateLiveOutputTokens(this.streamingMessage);
@@ -3319,6 +3330,14 @@ export class InteractiveMode {
 					this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens);
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
+					if (
+						this.addToolOutputDividerBeforeNextAssistant &&
+						this.hasVisibleAssistantText(event.message) &&
+						!event.message.content.some((content) => content.type === "toolCall")
+					) {
+						this.addToolOutputDividerBefore(this.streamingComponent);
+						this.addToolOutputDividerBeforeNextAssistant = false;
+					}
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
@@ -3353,6 +3372,11 @@ export class InteractiveMode {
 					this.streamingComponent.dispose();
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
+					if (event.message.content.some((content) => content.type === "toolCall")) {
+						this.addToolOutputDividerBeforeNextAssistant = true;
+					} else if (this.hasVisibleAssistantText(event.message)) {
+						this.addToolOutputDividerBeforeNextAssistant = false;
+					}
 					this.clearLiveOutputTokens();
 					this.footer.invalidate();
 				}
@@ -3425,7 +3449,7 @@ export class InteractiveMode {
 						const elapsedSeconds = elapsedMs / 1000;
 						const tokensPerSecond = this.completedAgentOutputTokens / elapsedSeconds;
 						this.showStatus(
-							`${pickCookedIcon()} ${pickCookedMessage()} ${elapsedSeconds.toFixed(1)}s · ${tokensPerSecond.toFixed(1)} tok/s`,
+							`${pickCookedIcon()} ${pickCookedMessage()} ${formatElapsedTime(elapsedSeconds)} · ${tokensPerSecond.toFixed(1)} tok/s`,
 						);
 					}
 				}
@@ -3632,6 +3656,26 @@ export class InteractiveMode {
 		this.chatContainer.addChild(component);
 	}
 
+	private hasVisibleAssistantText(message: AssistantMessage): boolean {
+		return message.content.some((content) => content.type === "text" && content.text.trim().length > 0);
+	}
+
+	private addToolOutputDivider(): void {
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Markdown("---", this.outputPad, 0, this.getMarkdownThemeWithSettings()));
+	}
+
+	private addToolOutputDividerBefore(component: Component): void {
+		const index = this.chatContainer.children.indexOf(component);
+		if (index === -1) return;
+		this.chatContainer.children.splice(
+			index,
+			0,
+			new Spacer(1),
+			new Markdown("---", this.outputPad, 0, this.getMarkdownThemeWithSettings()),
+		);
+	}
+
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
 		switch (message.role) {
 			case "bashExecution": {
@@ -3745,6 +3789,7 @@ export class InteractiveMode {
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
+		let addDividerBeforeAssistant = false;
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache-miss notices are not persisted; re-derive them from the full entry
 		// list and re-inject them after the assistant messages that paid for them.
@@ -3770,6 +3815,11 @@ export class InteractiveMode {
 			const message = item;
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
+				const hasToolCall = message.content.some((content) => content.type === "toolCall");
+				if (addDividerBeforeAssistant && !hasToolCall && this.hasVisibleAssistantText(message)) {
+					this.addToolOutputDivider();
+					addDividerBeforeAssistant = false;
+				}
 				this.addMessageToChat(message);
 				// Render tool call components
 				for (const content of message.content) {
@@ -3806,6 +3856,7 @@ export class InteractiveMode {
 						}
 					}
 				}
+				addDividerBeforeAssistant = message.content.some((content) => content.type === "toolCall");
 				if (message.stopReason !== "aborted" && message.stopReason !== "error") {
 					const miss = cacheMisses.get(message);
 					if (miss) this.addCacheMissNotice(miss);

@@ -272,6 +272,10 @@ function rebuildBashResultRenderComponent(
 		: (line: string) => theme.fg("toolOutput", line);
 	// const summary = isError ? undefined : theme.fg("muted", `${totalLines} stdout`);
 	const summary = "";
+	const durationNote =
+		startedAt !== undefined
+			? `${options.isPartial ? "Elapsed" : "Took"} ${formatDuration((endedAt ?? Date.now()) - startedAt)}`
+			: undefined;
 	if (output) {
 		component.addChild(
 			new DynamicText(
@@ -283,12 +287,15 @@ function rebuildBashResultRenderComponent(
 						hintPosition: "after",
 						summary,
 						styleLine,
+						trailingNote: durationNote,
 						width,
 					})}`,
 			),
 		);
 	} else if (summary) {
 		component.addChild(new Text(`${summary}`, 0, 0));
+	} else if (durationNote) {
+		component.addChild(new Text(theme.fg("muted", durationNote), 0, 0));
 	}
 
 	if (truncation?.truncated || fullOutputPath) {
@@ -306,12 +313,6 @@ function rebuildBashResultRenderComponent(
 			}
 		}
 		component.addChild(new Text(`\n${theme.fg("warning", `[${warnings.join(". ")}]`)}`, 0, 0));
-	}
-
-	if (startedAt !== undefined) {
-		const label = options.isPartial ? "Elapsed" : "Took";
-		const endTime = endedAt ?? Date.now();
-		component.addChild(new Text(`${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
 	}
 }
 
