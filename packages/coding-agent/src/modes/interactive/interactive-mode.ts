@@ -3257,6 +3257,7 @@ export class InteractiveMode {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
+					this.addToolOutputDividerBeforeNextAssistant = false;
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
@@ -3281,14 +3282,6 @@ export class InteractiveMode {
 
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
-					if (
-						this.addToolOutputDividerBeforeNextAssistant &&
-						this.hasVisibleAssistantText(event.message) &&
-						!event.message.content.some((content) => content.type === "toolCall")
-					) {
-						this.addToolOutputDividerBefore(this.streamingComponent);
-						this.addToolOutputDividerBeforeNextAssistant = false;
-					}
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.updateLiveOutputTokens(this.streamingMessage);
@@ -3330,6 +3323,7 @@ export class InteractiveMode {
 					this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens);
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
+					// Partial updates can stream text before a later tool call, so decide only from the final message.
 					if (
 						this.addToolOutputDividerBeforeNextAssistant &&
 						this.hasVisibleAssistantText(event.message) &&
@@ -3869,6 +3863,10 @@ export class InteractiveMode {
 					renderedPendingTools.delete(message.toolCallId);
 				}
 			} else {
+				// A user message starts a new turn; unfinished tool state from the prior turn must not leak into it.
+				if (message.role === "user") {
+					addDividerBeforeAssistant = false;
+				}
 				// All other messages use standard rendering
 				this.addMessageToChat(message, options);
 			}
