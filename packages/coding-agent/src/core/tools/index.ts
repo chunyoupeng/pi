@@ -1,4 +1,17 @@
 export {
+	BUILTIN_SUBAGENT_PROFILES,
+	loadCustomProfilesFromDir,
+	resolveSubagentProfiles,
+} from "../subagent/profiles.ts";
+export {
+	type SubagentExecutionStep,
+	type SubagentProfile,
+	type SubagentToolDetails,
+	type SubagentToolInput,
+	type SubagentUsage,
+	subagentSchema,
+} from "../subagent/types.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -51,6 +64,19 @@ export {
 	type ReadToolOptions,
 } from "./read.ts";
 export {
+	createSubagentTool,
+	createSubagentToolDefinition,
+	type SubagentToolOptions,
+	subagentToolSystemPromptContribution,
+} from "./subagent.ts";
+export {
+	formatSubagentToolCall,
+	formatSubagentUsage,
+	formatTokens,
+	renderSubagentCall,
+	renderSubagentResult,
+} from "./subagent-render.ts";
+export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
@@ -76,12 +102,13 @@ import { createFindTool, createFindToolDefinition, type FindToolOptions } from "
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { createSubagentTool, createSubagentToolDefinition, type SubagentToolOptions } from "./subagent.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
-export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls" | "subagent";
+export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "subagent"]);
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
@@ -91,6 +118,7 @@ export interface ToolsOptions {
 	grep?: GrepToolOptions;
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
+	subagent?: SubagentToolOptions;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -109,6 +137,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createFindToolDefinition(cwd, options?.find);
 		case "ls":
 			return createLsToolDefinition(cwd, options?.ls);
+		case "subagent":
+			return createSubagentToolDefinition(cwd, options?.subagent);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -130,6 +160,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createFindTool(cwd, options?.find);
 		case "ls":
 			return createLsTool(cwd, options?.ls);
+		case "subagent":
+			return createSubagentTool(cwd, options?.subagent);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -141,6 +173,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 		createBashToolDefinition(cwd, options?.bash),
 		createEditToolDefinition(cwd, options?.edit),
 		createWriteToolDefinition(cwd, options?.write),
+		createSubagentToolDefinition(cwd, options?.subagent),
 	];
 }
 
@@ -162,6 +195,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		grep: createGrepToolDefinition(cwd, options?.grep),
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
+		subagent: createSubagentToolDefinition(cwd, options?.subagent),
 	};
 }
 
@@ -171,6 +205,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 		createBashTool(cwd, options?.bash),
 		createEditTool(cwd, options?.edit),
 		createWriteTool(cwd, options?.write),
+		createSubagentTool(cwd, options?.subagent),
 	];
 }
 
@@ -192,5 +227,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		grep: createGrepTool(cwd, options?.grep),
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
+		subagent: createSubagentTool(cwd, options?.subagent),
 	};
 }

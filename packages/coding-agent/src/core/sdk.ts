@@ -25,6 +25,8 @@ import {
 	createLsTool,
 	createReadOnlyTools,
 	createReadTool,
+	createSubagentTool,
+	createSubagentToolDefinition,
 	createWriteTool,
 	type ToolName,
 	withFileMutationQueue,
@@ -111,7 +113,15 @@ export type {
 } from "./extensions/index.ts";
 export type { PromptTemplate } from "./prompt-templates.ts";
 export type { Skill } from "./skills.ts";
-export type { Tool } from "./tools/index.ts";
+export type {
+	SubagentExecutionStep,
+	SubagentProfile,
+	SubagentToolDetails,
+	SubagentToolInput,
+	SubagentToolOptions,
+	SubagentUsage,
+	Tool,
+} from "./tools/index.ts";
 
 export {
 	withFileMutationQueue,
@@ -125,6 +135,8 @@ export {
 	createGrepTool,
 	createFindTool,
 	createLsTool,
+	createSubagentTool,
+	createSubagentToolDefinition,
 };
 
 // Helper Functions
@@ -251,7 +263,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
-	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
+	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write", "subagent"];
 	const configuredDefaultToolNames = settingsManager.getDefaultTools();
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const excludedToolNames = options.excludeTools;
