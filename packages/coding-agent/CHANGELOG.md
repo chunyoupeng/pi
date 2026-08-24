@@ -4,6 +4,7 @@
 
 ### Added
 
+ - Added a pulsing green status bullet for the tool call gutter while a tool is executing.
  - Added one horizontal rule per user turn after its tool-call rows and before the final assistant response.
  - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
  - Added fullscreen transcript search with `Ctrl+Shift+F`, incremental match highlighting, configurable search match theme colors, and next/previous navigation with `Enter`/`Ctrl+G` and `Shift+Enter`/`Ctrl+Shift+G`.

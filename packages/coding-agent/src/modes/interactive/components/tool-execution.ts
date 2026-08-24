@@ -16,6 +16,9 @@ export interface ToolExecutionOptions {
 
 /** U+23FA renders as a filled dot on macOS; elsewhere U+25CF is the reliable one. */
 const STATUS_BULLET = process.platform === "darwin" ? "⏺" : "●";
+/** Frames cycled by the bullet while the tool is executing, giving the "running" dot a pulse. */
+const RUNNING_BULLET_FRAMES = [STATUS_BULLET, "○"] as const;
+const RUNNING_BULLET_INTERVAL_MS = 500;
 const RESULT_BRANCH = "⎿";
 const CALL_GUTTER_WIDTH = 2;
 const RESULT_GUTTER_WIDTH = 5;
@@ -51,6 +54,7 @@ export class ToolExecutionComponent extends Container {
 	};
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	private hideComponent = false;
+	private blinkInterval: NodeJS.Timeout | undefined;
 
 	constructor(
 		toolName: string,
@@ -156,12 +160,35 @@ export class ToolExecutionComponent extends Container {
 		};
 	}
 
-	/** Bullet colour tracks the call's outcome: pending, failed, or done. */
+	/** Bullet colour tracks the call's outcome: pending, failed, or done. While executing, the bullet pulses green. */
 	private renderStatusBullet(): string {
+		if (this.isRunning()) {
+			const frame =
+				RUNNING_BULLET_FRAMES[Math.floor(Date.now() / RUNNING_BULLET_INTERVAL_MS) % RUNNING_BULLET_FRAMES.length];
+			return theme.fg("success", frame);
+		}
 		if (!this.result) {
 			return theme.fg("dim", STATUS_BULLET);
 		}
 		return theme.fg(this.result.isError ? "error" : "success", STATUS_BULLET);
+	}
+
+	/** A tool is running once execution started and no final result has arrived yet. */
+	private isRunning(): boolean {
+		return this.executionStarted && (!this.result || this.isPartial);
+	}
+
+	private startBlink(): void {
+		if (this.blinkInterval || !this.isRunning()) return;
+		this.blinkInterval = setInterval(() => this.ui.requestRender(), RUNNING_BULLET_INTERVAL_MS);
+	}
+
+	private stopBlink(): void {
+		if (this.blinkInterval) {
+			clearInterval(this.blinkInterval);
+			this.blinkInterval = undefined;
+			this.ui.requestRender();
+		}
 	}
 
 	private createCallFallback(): Component {
@@ -192,6 +219,7 @@ export class ToolExecutionComponent extends Container {
 	markExecutionStarted(): void {
 		this.executionStarted = true;
 		this.updateDisplay();
+		this.startBlink();
 		this.ui.requestRender();
 	}
 
@@ -211,6 +239,9 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
+		if (!this.isRunning()) {
+			this.stopBlink();
+		}
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
 	}
@@ -251,6 +282,10 @@ export class ToolExecutionComponent extends Container {
 	setImageWidthCells(width: number): void {
 		this.imageWidthCells = Math.max(1, Math.floor(width));
 		this.updateDisplay();
+	}
+
+	dispose(): void {
+		this.stopBlink();
 	}
 
 	override invalidate(): void {
