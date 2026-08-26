@@ -47,7 +47,8 @@ describe("Subagent Core & Tool", () => {
 
 	describe("Subagent Profiles", () => {
 		it("should expose built-in profiles", () => {
-			const profiles = resolveSubagentProfiles(testDir);
+			// Pass testDir as agentDir so user-level ~/.pi/agent/agents cannot leak into the test.
+			const profiles = resolveSubagentProfiles(testDir, testDir);
 			expect(profiles.scout).toBeDefined();
 			expect(profiles.scout.tools).toEqual(["read", "grep", "find", "ls"]);
 			expect(profiles.planner).toBeDefined();
@@ -98,7 +99,7 @@ Write unit tests.`;
 
 			writeFileSync(join(projectPiAgentsDir, "tester.md"), projectAgent);
 
-			const resolved = resolveSubagentProfiles(testDir);
+			const resolved = resolveSubagentProfiles(testDir, testDir);
 			expect(resolved.scout).toBeDefined();
 			expect(resolved.tester).toBeDefined();
 			expect(resolved.tester.tools).toEqual(["read", "write"]);
@@ -149,8 +150,8 @@ Write unit tests.`;
 			const comp = renderSubagentCall({ agent: "scout", task: "Analyze auth logic" }, theme, {} as any);
 			expect(comp).toBeInstanceOf(Text);
 			const rendered = (comp as Text).render(80).join("\n");
-			expect(rendered).toContain("subagent");
-			expect(rendered).toContain("scout");
+			expect(rendered).toContain("Subagent");
+			expect(rendered).toContain("Scout");
 			expect(rendered).toContain("Analyze auth logic");
 		});
 
@@ -185,7 +186,7 @@ Write unit tests.`;
 			} as any);
 			expect(collapsed).toBeInstanceOf(Text);
 			const collapsedText = (collapsed as Text).render(80).join("\n");
-			expect(collapsedText).toContain("scout");
+			expect(collapsedText).toContain("Scout");
 			expect(collapsedText).toContain("read");
 			expect(collapsedText).toContain("grep");
 

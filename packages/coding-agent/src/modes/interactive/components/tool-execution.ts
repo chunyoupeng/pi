@@ -14,10 +14,10 @@ export interface ToolExecutionOptions {
 	imageWidthCells?: number;
 }
 
-/** U+23FA renders as a filled dot on macOS; elsewhere U+25CF is the reliable one. */
-const STATUS_BULLET = process.platform === "darwin" ? "⏺" : "●";
-/** Frames cycled by the bullet while the tool is executing, giving the "running" dot a pulse. */
-const RUNNING_BULLET_FRAMES = [STATUS_BULLET, "○"] as const;
+/** Keep one glyph for every state: text circles with different outlines do not share a terminal-cell centre. */
+const STATUS_BULLET = process.platform === "darwin" ? "⬤" : "●";
+/** Foreground colors cycled by the bullet while the tool is executing, giving the fixed dot a pulse. */
+const RUNNING_BULLET_FRAMES = ["border", "dim"] as const;
 const RUNNING_BULLET_INTERVAL_MS = 500;
 const RESULT_BRANCH = "⎿";
 const CALL_GUTTER_WIDTH = 2;
@@ -160,15 +160,15 @@ export class ToolExecutionComponent extends Container {
 		};
 	}
 
-	/** Bullet colour tracks the call's outcome: pending, failed, or done. While executing, the bullet pulses green. */
+	/** Bullet color tracks the call's outcome: pending (blue), running (blue/gray pulse), done (green), or failed (red). */
 	private renderStatusBullet(): string {
 		if (this.isRunning()) {
 			const frame =
 				RUNNING_BULLET_FRAMES[Math.floor(Date.now() / RUNNING_BULLET_INTERVAL_MS) % RUNNING_BULLET_FRAMES.length];
-			return theme.fg("success", frame);
+			return theme.fg(frame, STATUS_BULLET);
 		}
 		if (!this.result) {
-			return theme.fg("dim", STATUS_BULLET);
+			return theme.fg("border", STATUS_BULLET);
 		}
 		return theme.fg(this.result.isError ? "error" : "success", STATUS_BULLET);
 	}

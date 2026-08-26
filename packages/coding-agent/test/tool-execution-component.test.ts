@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
-import { Text, type TUI } from "@earendil-works/pi-tui";
+import { Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
@@ -30,9 +30,74 @@ function createFakeTui(): TUI {
 	} as unknown as TUI;
 }
 
+const statusBulletForTest = process.platform === "darwin" ? "⬤" : "●";
+
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {
 		initTheme("dark");
+	});
+
+	test("pulses the running bullet without changing its glyph or gutter position", () => {
+		const now = vi.spyOn(Date, "now");
+		try {
+			now.mockReturnValue(0);
+			const toolDefinition: ToolDefinition = {
+				...createBaseToolDefinition(),
+				renderCall: () => new Text("custom call", 0, 0),
+			};
+			const component = new ToolExecutionComponent(
+				"custom_tool",
+				"tool-pulse",
+				{},
+				{},
+				toolDefinition,
+				createFakeTui(),
+				process.cwd(),
+			);
+
+			component.markExecutionStarted();
+			const brightLine = component.render(80)[0]!;
+			now.mockReturnValue(500);
+			const dimLine = component.render(80)[0]!;
+
+			expect(visibleWidth(brightLine)).toBe(visibleWidth(dimLine));
+			expect(stripAnsi(brightLine)).toBe(stripAnsi(dimLine));
+			expect(brightLine).toContain(theme.fg("success", statusBulletForTest));
+			expect(dimLine).toContain(theme.fg("dim", statusBulletForTest));
+			component.dispose();
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	test("uses blue for success and red for errors", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("custom call", 0, 0),
+		};
+		const success = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-success-color",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		success.updateResult({ content: [], isError: false }, false);
+		expect(success.render(80)[0]).toContain(theme.fg("border", statusBulletForTest));
+
+		const error = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-error-color",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		error.updateResult({ content: [], isError: true }, false);
+		expect(error.render(80)[0]).toContain(theme.fg("error", statusBulletForTest));
 	});
 
 	test("stacks custom call and result renderers like the old implementation", () => {

@@ -84,6 +84,14 @@ export function formatSubagentToolCall(name: string, args: Record<string, unknow
 	}
 }
 
+/** Display an agent key ("scout", "code-reviewer") as a capitalized label ("Scout", "Code Reviewer"). */
+function displayAgentName(name: string): string {
+	return name
+		.split(/[\s_-]+/)
+		.map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : word))
+		.join(" ");
+}
+
 export function renderSubagentCall(
 	args: SubagentToolInput,
 	theme: Theme,
@@ -91,7 +99,7 @@ export function renderSubagentCall(
 ): Component {
 	const agentName = args.agent || "...";
 	const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
-	let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", agentName);
+	let text = theme.fg("toolTitle", theme.bold("Subagent ")) + theme.fg("accent", displayAgentName(agentName));
 	text += `\n  ${theme.fg("dim", preview)}`;
 	return new Text(text, 0, 0);
 }
@@ -115,7 +123,7 @@ export function renderSubagentResult(
 
 	if (options.expanded) {
 		const container = new Container();
-		let header = `${icon} ${theme.fg("toolTitle", theme.bold(details.agent))}${sourceLabel}`;
+		let header = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${sourceLabel}`;
 		if (isError && details.errorMessage) {
 			header += ` ${theme.fg("error", `[${details.status}]`)}`;
 		}
@@ -154,7 +162,7 @@ export function renderSubagentResult(
 		return container;
 	}
 
-	let text = `${icon} ${theme.fg("toolTitle", theme.bold(details.agent))}${sourceLabel}`;
+	let text = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${sourceLabel}`;
 	if (isError && details.errorMessage) {
 		text += `\n${theme.fg("error", `Error: ${details.errorMessage}`)}`;
 	} else if (steps.length === 0 && !details.finalText) {
