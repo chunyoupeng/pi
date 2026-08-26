@@ -2,7 +2,7 @@ import * as os from "node:os";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { keyText } from "../../modes/interactive/components/keybinding-hints.ts";
-import { getMarkdownTheme, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, type Theme, type ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import type { ToolRenderContext, ToolRenderResultOptions } from "../extensions/types.ts";
 import type { SubagentToolDetails, SubagentToolInput, SubagentUsage } from "../subagent/types.ts";
 
@@ -85,11 +85,43 @@ export function formatSubagentToolCall(name: string, args: Record<string, unknow
 }
 
 /** Display an agent key ("scout", "code-reviewer") as a capitalized label ("Scout", "Code Reviewer"). */
-function displayAgentName(name: string): string {
+export function displayAgentName(name: string): string {
 	return name
 		.split(/[\s_-]+/)
 		.map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : word))
 		.join(" ");
+}
+
+function getRoleColor(role: string): ThemeColor {
+	switch (role.toLowerCase()) {
+		case "scout":
+			return "accent";
+		case "planner":
+			return "syntaxFunction";
+		case "reviewer":
+			return "warning";
+		case "worker":
+			return "toolTitle";
+		default:
+			return "accent";
+	}
+}
+
+function formatAgentBadge(agent: string, name?: string, theme?: Theme): string {
+	const roleName = displayAgentName(agent);
+	const color = getRoleColor(agent);
+	if (!theme) return name ? `[${roleName} · ${name}]` : `[${roleName}]`;
+
+	if (name) {
+		return (
+			theme.fg("dim", "[") +
+			theme.fg(color, theme.bold(roleName)) +
+			theme.fg("dim", " · ") +
+			theme.fg("accent", name) +
+			theme.fg("dim", "]")
+		);
+	}
+	return theme.fg("dim", "[") + theme.fg(color, theme.bold(roleName)) + theme.fg("dim", "]");
 }
 
 export function renderSubagentCall(
@@ -100,11 +132,12 @@ export function renderSubagentCall(
 	const agentName = args.agent || "...";
 	const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
 	const sessionLabel = args.sessionId ? ` (${args.sessionId}${args.resetSession ? " [reset]" : ""})` : "";
+
 	let text =
 		theme.fg("toolTitle", theme.bold("Subagent ")) +
-		theme.fg("accent", displayAgentName(agentName)) +
+		formatAgentBadge(agentName, undefined, theme) +
 		theme.fg("muted", sessionLabel);
-	text += `\n  ${theme.fg("dim", preview)}`;
+	text += `\n  ${theme.fg("muted", "└─ ")}${theme.fg("dim", preview)}`;
 	return new Text(text, 0, 0);
 }
 
@@ -124,15 +157,13 @@ export function renderSubagentResult(
 	const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 	const steps = details.steps ?? [];
 	const sourceLabel = details.source ? theme.fg("muted", ` (${details.source})`) : "";
-	const nameLabel = details.name ? theme.fg("accent", ` (${details.name})`) : "";
-	const resumedLabel = details.isResumed ? theme.fg("warning", " [resumed]") : "";
+	const badge = formatAgentBadge(details.agent, details.name, theme);
+	const resumedTag = details.isResumed ? ` ${theme.fg("warning", "[resumed]")}` : "";
+	const sessionTag = details.sessionId ? ` ${theme.fg("muted", `[${details.sessionId}]`)}` : "";
 
 	if (options.expanded) {
 		const container = new Container();
-		let header = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${nameLabel}${resumedLabel}${sourceLabel}`;
-		if (details.sessionId) {
-			header += ` ${theme.fg("muted", `[${details.sessionId}]`)}`;
-		}
+		let header = `${icon} ${badge}${resumedTag}${sessionTag}${sourceLabel}`;
 		if (isError && details.errorMessage) {
 			header += ` ${theme.fg("error", `[${details.status}]`)}`;
 		}
@@ -148,10 +179,18 @@ export function renderSubagentResult(
 
 		if (steps.length > 0) {
 			container.addChild(new Spacer(1));
-			container.addChild(new Text(theme.fg("muted", "─── Execution Steps ───"), 0, 0));
-			for (const step of steps) {
+			container.addChild(new Text(theme.fg("muted", `─── Execution Steps (${steps.length}) ───`), 0, 0));
+			for (let i = 0; i < steps.length; i++) {
+				const step = steps[i]!;
+				const isLast = i === steps.length - 1;
+				const branch = isLast ? "└─ " : "├─ ";
+				const num = `${i + 1}. `;
 				container.addChild(
-					new Text(`${theme.fg("muted", "→ ")}${formatSubagentToolCall(step.name, step.args, theme)}`, 0, 0),
+					new Text(
+						`  ${theme.fg("muted", branch)}${theme.fg("dim", num)}${formatSubagentToolCall(step.name, step.args, theme)}`,
+						0,
+						0,
+					),
 				);
 			}
 		}
@@ -171,29 +210,33 @@ export function renderSubagentResult(
 		return container;
 	}
 
-	let text = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${nameLabel}${resumedLabel}${sourceLabel}`;
+	let text = `${icon} ${badge}${resumedTag}${sessionTag}${sourceLabel}`;
 	if (isError && details.errorMessage) {
-		text += `\n${theme.fg("error", `Error: ${details.errorMessage}`)}`;
+		text += `\n  ${theme.fg("error", `└─ Error: ${details.errorMessage}`)}`;
 	} else if (steps.length === 0 && !details.finalText) {
-		text += `\n${theme.fg("muted", "(no output)")}`;
+		text += `\n  ${theme.fg("muted", "└─ (no output)")}`;
 	} else {
 		const toShow = steps.slice(-COLLAPSED_ITEM_COUNT);
 		const skipped = steps.length > COLLAPSED_ITEM_COUNT ? steps.length - COLLAPSED_ITEM_COUNT : 0;
 		if (skipped > 0) {
-			text += `\n${theme.fg("muted", `... ${skipped} earlier steps`)}`;
+			text += `\n  ${theme.fg("muted", `│ ... ${skipped} earlier steps`)}`;
 		}
-		for (const step of toShow) {
-			text += `\n${theme.fg("muted", "→ ")}${formatSubagentToolCall(step.name, step.args, theme)}`;
+		for (let i = 0; i < toShow.length; i++) {
+			const step = toShow[i]!;
+			const isLast = i === toShow.length - 1;
+			const branch = isLast ? "└─ " : "├─ ";
+			const globalIndex = steps.length - toShow.length + i + 1;
+			text += `\n  ${theme.fg("muted", branch)}${theme.fg("dim", `${globalIndex}. `)}${formatSubagentToolCall(step.name, step.args, theme)}`;
 		}
 		if (steps.length > COLLAPSED_ITEM_COUNT || details.finalText) {
 			const key = keyText("app.tools.expand") || "ctrl+o";
-			text += `\n${theme.fg("dim", `(${key} to expand)`)}`;
+			text += `\n  ${theme.fg("dim", `(${key} to expand)`)}`;
 		}
 	}
 
 	const usageStr = formatSubagentUsage(details.usage, details.model);
 	if (usageStr) {
-		text += `\n${theme.fg("dim", usageStr)}`;
+		text += `\n  ${theme.fg("dim", usageStr)}`;
 	}
 
 	return new Text(text, 0, 0);
