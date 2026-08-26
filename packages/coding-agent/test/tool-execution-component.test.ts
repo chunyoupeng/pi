@@ -30,7 +30,7 @@ function createFakeTui(): TUI {
 	} as unknown as TUI;
 }
 
-const statusBulletForTest = process.platform === "darwin" ? "⬤" : "●";
+const statusBulletForTest = "⏺";
 
 describe("ToolExecutionComponent parity", () => {
 	beforeAll(() => {

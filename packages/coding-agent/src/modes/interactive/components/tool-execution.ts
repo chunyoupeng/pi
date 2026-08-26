@@ -15,7 +15,7 @@ export interface ToolExecutionOptions {
 }
 
 /** Keep one glyph for every state: text circles with different outlines do not share a terminal-cell centre. */
-const STATUS_BULLET = process.platform === "darwin" ? "⬤" : "●";
+const STATUS_BULLET = "⏺";
 /** Foreground colors cycled by the bullet while the tool is executing, giving the fixed dot a pulse. */
 const RUNNING_BULLET_FRAMES = ["border", "dim"] as const;
 const RUNNING_BULLET_INTERVAL_MS = 500;
