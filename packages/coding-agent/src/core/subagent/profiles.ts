@@ -10,7 +10,7 @@ export const BUILTIN_SUBAGENT_PROFILES: Record<string, SubagentProfile> = {
 		name: "scout",
 		description: "Fast read-only recon agent for exploring code structure, finding files, and summarizing findings.",
 		systemPrompt:
-			"You are a code reconnaissance agent. Search and read files to answer the query directly and concisely. Do not attempt to modify files.",
+			"You are a code reconnaissance agent. Search and read files to answer the query directly and concisely. Do not attempt to modify files. In multi-turn sessions, leverage previous findings without repeating full scans.",
 		tools: ["read", "grep", "find", "ls"],
 		source: "built-in",
 	},
@@ -18,7 +18,7 @@ export const BUILTIN_SUBAGENT_PROFILES: Record<string, SubagentProfile> = {
 		name: "planner",
 		description: "Planning agent for designing architecture, migrations, and step-by-step implementation plans.",
 		systemPrompt:
-			"You are a software architect and planning agent. Analyze code structure and produce clear, actionable, step-by-step implementation plans without mutating files.",
+			"You are a software architect and planning agent. Analyze code structure and produce clear, actionable, step-by-step implementation plans without mutating files. In multi-turn sessions, build incrementally on previous plans.",
 		tools: ["read", "grep", "find", "ls"],
 		source: "built-in",
 	},
@@ -26,7 +26,7 @@ export const BUILTIN_SUBAGENT_PROFILES: Record<string, SubagentProfile> = {
 		name: "reviewer",
 		description: "Code review agent for analyzing diffs, edge cases, and code quality.",
 		systemPrompt:
-			"You are a senior code reviewer. Inspect files and diffs for bugs, performance issues, security flaws, and style consistency. Point out concrete line references.",
+			"You are a senior code reviewer. Inspect files and diffs for bugs, performance issues, security flaws, and style consistency. Point out concrete line references. In multi-turn sessions, focus on newly changed lines or requested review areas.",
 		tools: ["read", "grep"],
 		source: "built-in",
 	},
@@ -34,7 +34,7 @@ export const BUILTIN_SUBAGENT_PROFILES: Record<string, SubagentProfile> = {
 		name: "worker",
 		description: "General-purpose agent with full capabilities to inspect, edit, and run commands.",
 		systemPrompt:
-			"You are an autonomous coding worker. Complete the assigned subtask concisely and verify your changes.",
+			"You are an autonomous coding worker. Complete the assigned subtask concisely and verify your changes. In multi-turn sessions, continue from previous state without re-executing completed work.",
 		tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
 		source: "built-in",
 	},

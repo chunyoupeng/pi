@@ -99,7 +99,11 @@ export function renderSubagentCall(
 ): Component {
 	const agentName = args.agent || "...";
 	const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
-	let text = theme.fg("toolTitle", theme.bold("Subagent ")) + theme.fg("accent", displayAgentName(agentName));
+	const sessionLabel = args.sessionId ? ` (${args.sessionId}${args.resetSession ? " [reset]" : ""})` : "";
+	let text =
+		theme.fg("toolTitle", theme.bold("Subagent ")) +
+		theme.fg("accent", displayAgentName(agentName)) +
+		theme.fg("muted", sessionLabel);
 	text += `\n  ${theme.fg("dim", preview)}`;
 	return new Text(text, 0, 0);
 }
@@ -120,10 +124,15 @@ export function renderSubagentResult(
 	const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 	const steps = details.steps ?? [];
 	const sourceLabel = details.source ? theme.fg("muted", ` (${details.source})`) : "";
+	const nameLabel = details.name ? theme.fg("accent", ` (${details.name})`) : "";
+	const resumedLabel = details.isResumed ? theme.fg("warning", " [resumed]") : "";
 
 	if (options.expanded) {
 		const container = new Container();
-		let header = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${sourceLabel}`;
+		let header = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${nameLabel}${resumedLabel}${sourceLabel}`;
+		if (details.sessionId) {
+			header += ` ${theme.fg("muted", `[${details.sessionId}]`)}`;
+		}
 		if (isError && details.errorMessage) {
 			header += ` ${theme.fg("error", `[${details.status}]`)}`;
 		}
@@ -162,7 +171,7 @@ export function renderSubagentResult(
 		return container;
 	}
 
-	let text = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${sourceLabel}`;
+	let text = `${icon} ${theme.fg("toolTitle", theme.bold(displayAgentName(details.agent)))}${nameLabel}${resumedLabel}${sourceLabel}`;
 	if (isError && details.errorMessage) {
 		text += `\n${theme.fg("error", `Error: ${details.errorMessage}`)}`;
 	} else if (steps.length === 0 && !details.finalText) {

@@ -1,8 +1,17 @@
 export {
+	generateRandomName,
+	generateSubagentSessionId,
+	SUBAGENT_NAMES,
+} from "../subagent/names.ts";
+export {
 	BUILTIN_SUBAGENT_PROFILES,
 	loadCustomProfilesFromDir,
 	resolveSubagentProfiles,
 } from "../subagent/profiles.ts";
+export {
+	type SubagentSession,
+	SubagentSessionPool,
+} from "../subagent/session-pool.ts";
 export {
 	type SubagentExecutionStep,
 	type SubagentProfile,

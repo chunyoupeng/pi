@@ -1,4 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -11,10 +12,14 @@ import {
 	formatSubagentToolCall,
 	formatSubagentUsage,
 	formatTokens,
+	generateRandomName,
+	generateSubagentSessionId,
 	loadCustomProfilesFromDir,
 	renderSubagentCall,
 	renderSubagentResult,
 	resolveSubagentProfiles,
+	SUBAGENT_NAMES,
+	SubagentSessionPool,
 } from "../src/index.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -195,6 +200,151 @@ Write unit tests.`;
 				isError: false,
 			} as any);
 			expect(expanded).toBeInstanceOf(Container);
+		});
+
+		it("should render call preview with sessionId and resetSession", () => {
+			const comp = renderSubagentCall(
+				{ agent: "worker", task: "Continue refactoring", sessionId: "worker-jack-1234", resetSession: true },
+				theme,
+				{} as any,
+			);
+			expect(comp).toBeInstanceOf(Text);
+			const rendered = (comp as Text).render(80).join("\n");
+			expect(rendered).toContain("Subagent");
+			expect(rendered).toContain("Worker");
+			expect(rendered).toContain("worker-jack-1234");
+			expect(rendered).toContain("[reset]");
+			expect(rendered).toContain("Continue refactoring");
+		});
+
+		it("should render results with name, sessionId, and resumed tag", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "Refactored module" }],
+				details: {
+					agent: "worker",
+					name: "Jack",
+					sessionId: "worker-jack-1234",
+					isResumed: true,
+					task: "Fix auth bug",
+					status: "completed" as const,
+					steps: [{ type: "toolCall" as const, name: "read", args: { path: "auth.ts" } }],
+					finalText: "Fixed bug",
+				},
+			};
+
+			const collapsed = renderSubagentResult(result, { expanded: false, isPartial: false }, theme, {
+				isError: false,
+			} as any);
+			const collapsedText = (collapsed as Text).render(80).join("\n");
+			expect(collapsedText).toContain("Worker");
+			expect(collapsedText).toContain("Jack");
+			expect(collapsedText).toContain("resumed");
+
+			const expanded = renderSubagentResult(result, { expanded: true, isPartial: false }, theme, {
+				isError: false,
+			} as any);
+			expect(expanded).toBeInstanceOf(Container);
+		});
+	});
+
+	describe("Subagent Naming & Session ID Generation", () => {
+		it("should generate a random name from SUBAGENT_NAMES list", () => {
+			const name = generateRandomName();
+			expect(SUBAGENT_NAMES).toContain(name as any);
+		});
+
+		it("should generate a formatted sessionId with role and suffix", () => {
+			const sessionId = generateSubagentSessionId("worker", "Jack");
+			expect(sessionId).toMatch(/^worker-jack-[a-z0-9]{4}$/);
+		});
+	});
+
+	describe("SubagentSessionPool", () => {
+		it("should store, retrieve, delete, and clear sessions", () => {
+			const pool = new SubagentSessionPool();
+			expect(pool.list().length).toBe(0);
+
+			const fakeSession: any = {
+				sessionId: "worker-alice-1234",
+				name: "Alice",
+				agent: "worker",
+				subAgent: {} as any,
+				createdAt: Date.now(),
+				lastUsedAt: Date.now(),
+				totalTurns: 1,
+				totalUsage: { turns: 1, input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.001 },
+				historySteps: [],
+			};
+
+			pool.set(fakeSession.sessionId, fakeSession);
+			expect(pool.has("worker-alice-1234")).toBe(true);
+			expect(pool.get("worker-alice-1234")?.name).toBe("Alice");
+			expect(pool.list().length).toBe(1);
+
+			pool.delete("worker-alice-1234");
+			expect(pool.has("worker-alice-1234")).toBe(false);
+
+			pool.set(fakeSession.sessionId, fakeSession);
+			pool.clear();
+			expect(pool.list().length).toBe(0);
+		});
+	});
+
+	describe("Multi-turn Session Persistence & Execution", () => {
+		it("persists conversation across multiple turns with same sessionId and resets on request", async () => {
+			const faux = registerFauxProvider({
+				models: [{ id: "faux-1", reasoning: false }],
+			});
+			faux.setResponses([
+				fauxAssistantMessage("Turn 1 output"),
+				fauxAssistantMessage("Turn 2 output"),
+				fauxAssistantMessage("Turn 3 output"),
+			]);
+
+			const fauxModel = faux.getModel();
+			const pool = new SubagentSessionPool();
+			const tool = createSubagentTool(testDir, { defaultModel: fauxModel, sessionPool: pool });
+
+			// Turn 1: first invocation without explicit sessionId
+			const result1 = await tool.execute("call-1", { agent: "worker", task: "First task" });
+			expect(result1.details?.status).toBe("completed");
+			expect(result1.details?.isResumed).toBe(false);
+			expect(result1.details?.name).toBeDefined();
+			expect(result1.details?.sessionId).toBeDefined();
+			const sessionId = result1.details!.sessionId!;
+			const name = result1.details!.name!;
+			const firstContent = result1.content[0];
+			const firstText = firstContent?.type === "text" ? firstContent.text : "";
+			expect(firstText).toContain(`[Subagent: worker | Name: ${name} | Session: ${sessionId}]`);
+			expect(firstText).toContain("Turn 1 output");
+			expect(pool.has(sessionId)).toBe(true);
+
+			// Turn 2: second invocation reusing the same sessionId
+			const result2 = await tool.execute("call-2", { agent: "worker", task: "Follow-up task", sessionId });
+			expect(result2.details?.status).toBe("completed");
+			expect(result2.details?.isResumed).toBe(true);
+			expect(result2.details?.name).toBe(name);
+			expect(result2.details?.sessionId).toBe(sessionId);
+			const secondContent = result2.content[0];
+			const secondText = secondContent?.type === "text" ? secondContent.text : "";
+			expect(secondText).toContain(`[Subagent: worker | Name: ${name} | Session: ${sessionId} (Resumed)]`);
+			expect(secondText).toContain("Turn 2 output");
+
+			// Turn 3: resetSession = true
+			const result3 = await tool.execute("call-3", {
+				agent: "worker",
+				task: "Fresh task",
+				sessionId,
+				resetSession: true,
+			});
+			expect(result3.details?.status).toBe("completed");
+			expect(result3.details?.isResumed).toBe(false);
+			const thirdContent = result3.content[0];
+			const thirdText = thirdContent?.type === "text" ? thirdContent.text : "";
+			expect(thirdText).not.toContain("(Resumed)");
+			expect(thirdText).toContain("Turn 3 output");
+
+			faux.unregister();
 		});
 	});
 
