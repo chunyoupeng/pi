@@ -32,7 +32,7 @@ function shortenSubagentPath(path: string): string {
 	const home = os.homedir();
 	const displayPath = path.startsWith(home) ? `~${path.slice(home.length)}` : path;
 	const normalizedPath = displayPath.replaceAll("\\", "/");
-	if (normalizedPath.length <= 80) return normalizedPath;
+	if (normalizedPath.length <= 70) return normalizedPath;
 
 	const segments = normalizedPath.split("/");
 	const firstDirectoryIndex = segments.findIndex(
