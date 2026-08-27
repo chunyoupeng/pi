@@ -21,6 +21,8 @@ export const DEFAULT_WORKING_MESSAGES = [
 	"Arcana",
 	"Satori",
 	"Aletheia",
+	"Thinking",
+	"Running",
 ] as const;
 
 const DEFAULT_WORKING_FRAMES = ["✦", "✧", "⋆", "·", "⋆", "✧"] as const;

@@ -28,12 +28,44 @@ export function formatSubagentUsage(usage?: SubagentUsage, model?: string): stri
 	return parts.join(" ");
 }
 
-export function formatSubagentToolCall(name: string, args: Record<string, unknown>, theme: Theme): string {
-	const shortenPath = (p: string) => {
-		const home = os.homedir();
-		return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-	};
+function shortenSubagentPath(path: string): string {
+	const home = os.homedir();
+	const displayPath = path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+	const normalizedPath = displayPath.replaceAll("\\", "/");
+	if (normalizedPath.length <= 80) return normalizedPath;
 
+	const segments = normalizedPath.split("/");
+	const firstDirectoryIndex = segments.findIndex(
+		(segment) => segment !== "" && segment !== "." && segment !== "~" && !/^[A-Za-z]:$/.test(segment),
+	);
+	let lastFileIndex = segments.length - 1;
+	while (lastFileIndex >= 0 && segments[lastFileIndex] === "") {
+		lastFileIndex--;
+	}
+
+	if (firstDirectoryIndex === -1 || lastFileIndex <= firstDirectoryIndex + 1) {
+		return normalizedPath;
+	}
+
+	return segments
+		.map((segment, index) => {
+			if (
+				index === firstDirectoryIndex ||
+				index === lastFileIndex ||
+				segment === "" ||
+				segment === "." ||
+				segment === ".." ||
+				segment === "~" ||
+				/^[A-Za-z]:$/.test(segment)
+			) {
+				return segment;
+			}
+			return segment.startsWith(".") ? segment.slice(0, 2) : segment.slice(0, 1);
+		})
+		.join("/");
+}
+
+export function formatSubagentToolCall(name: string, args: Record<string, unknown>, theme: Theme): string {
 	switch (name) {
 		case "bash": {
 			const command = (args.command as string) || "...";
@@ -42,7 +74,7 @@ export function formatSubagentToolCall(name: string, args: Record<string, unknow
 		}
 		case "read": {
 			const rawPath = (args.file_path || args.path || "...") as string;
-			const filePath = shortenPath(rawPath);
+			const filePath = shortenSubagentPath(rawPath);
 			const offset = args.offset as number | undefined;
 			const limit = args.limit as number | undefined;
 			let text = theme.fg("accent", filePath);
@@ -55,11 +87,11 @@ export function formatSubagentToolCall(name: string, args: Record<string, unknow
 		}
 		case "write": {
 			const rawPath = (args.file_path || args.path || "...") as string;
-			return theme.fg("muted", "write ") + theme.fg("accent", shortenPath(rawPath));
+			return theme.fg("muted", "write ") + theme.fg("accent", shortenSubagentPath(rawPath));
 		}
 		case "edit": {
 			const rawPath = (args.file_path || args.path || "...") as string;
-			return theme.fg("muted", "edit ") + theme.fg("accent", shortenPath(rawPath));
+			return theme.fg("muted", "edit ") + theme.fg("accent", shortenSubagentPath(rawPath));
 		}
 		case "grep": {
 			const pattern = (args.query || args.pattern || "...") as string;
@@ -72,7 +104,7 @@ export function formatSubagentToolCall(name: string, args: Record<string, unknow
 		}
 		case "ls": {
 			const rawPath = (args.path || ".") as string;
-			return theme.fg("muted", "ls ") + theme.fg("accent", shortenPath(rawPath));
+			return theme.fg("muted", "ls ") + theme.fg("accent", shortenSubagentPath(rawPath));
 		}
 		default: {
 			const preview = JSON.stringify(args);

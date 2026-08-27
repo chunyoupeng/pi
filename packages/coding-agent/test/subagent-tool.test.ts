@@ -22,6 +22,7 @@ import {
 	SubagentSessionPool,
 } from "../src/index.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 const mockModel: Model<"anthropic-messages"> = {
 	id: "mock-model",
@@ -145,6 +146,23 @@ Write unit tests.`;
 			expect(readCall).toContain("read");
 			expect(readCall).toContain("src/index.ts");
 			expect(readCall).toContain(":10-29");
+
+			const shortReadCall = formatSubagentToolCall("read", { path: "src/components/index.ts" }, theme);
+			expect(stripAnsi(shortReadCall)).toContain("read src/components/index.ts");
+
+			const longReadCall = formatSubagentToolCall(
+				"read",
+				{
+					path: "./air-unified-payment-core/src/main/java/com/umetrip/g3/core/air_unified_payment/test.js",
+					offset: 1,
+					limit: 200,
+				},
+				theme,
+			);
+			expect(stripAnsi(longReadCall)).toContain("read ./air-unified-payment-core/s/m/j/c/u/g/c/a/test.js:1-200");
+			expect(stripAnsi(longReadCall)).not.toContain(
+				"./air-unified-payment-core/src/main/java/com/umetrip/g3/core/air_unified_payment/test.js",
+			);
 
 			const grepCall = formatSubagentToolCall("grep", { query: "export const" }, theme);
 			expect(grepCall).toContain("grep");
