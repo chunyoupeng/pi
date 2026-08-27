@@ -32,8 +32,8 @@ describe("status indicators", () => {
 	it("formats elapsed time with compact hour, minute, and second units", () => {
 		expect(formatElapsedTime(0)).toBe("0s");
 		expect(formatElapsedTime(59.9)).toBe("59s");
-		expect(formatElapsedTime(80)).toBe("1m20s");
-		expect(formatElapsedTime(7507)).toBe("2h5m7s");
+		expect(formatElapsedTime(80)).toBe("1m 20s");
+		expect(formatElapsedTime(7507)).toBe("2h 5m 7s");
 	});
 
 	it("animates the default working icon", () => {

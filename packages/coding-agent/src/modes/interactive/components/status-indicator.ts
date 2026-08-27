@@ -9,9 +9,6 @@ import { keyText } from "./keybinding-hints.ts";
 export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSummary";
 
 export const DEFAULT_WORKING_MESSAGES = [
-	"思考中",
-	"推演中",
-	"酝酿中",
 	"Pondering",
 	"Weaving",
 	"Seeking",
@@ -157,11 +154,11 @@ export class WorkingStatusIndicator extends StatusIndicator {
 			index === sweepPosition ? theme.bold(character) : character,
 		);
 		const accentedBaseMessage = theme.fg("accent", highlighted.join(""));
-		const pulsePhase = Math.floor(this.textAnimationFrame / 3) % 4;
+		const pulsePhase = this.textAnimationFrame % 8;
 		const animatedBaseMessage =
-			pulsePhase === 0
+			pulsePhase <= 1
 				? chalk.dim(accentedBaseMessage)
-				: pulsePhase === 2
+				: pulsePhase >= 5 && pulsePhase <= 6
 					? theme.bold(accentedBaseMessage)
 					: accentedBaseMessage;
 		return animatedBaseMessage + theme.fg("text", message.slice(this.baseMessage.length));
