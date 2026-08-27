@@ -80,13 +80,17 @@ export class Loader extends Text {
 		}, this.intervalMs);
 	}
 
-	private updateDisplay(): void {
+	protected updateDisplay(): void {
 		const frame = this.frames[this.currentFrame] ?? "";
 		const renderedFrame = this.renderIndicatorVerbatim ? frame : this.spinnerColorFn(frame);
 		const indicator = frame.length > 0 ? `${renderedFrame} ` : "";
-		this.setText(`${indicator}${this.messageColorFn(this.message)}`);
+		this.setText(`${indicator}${this.renderMessage(this.message)}`);
 		if (this.ui) {
 			this.ui.requestRender();
 		}
+	}
+
+	protected renderMessage(message: string): string {
+		return this.messageColorFn(message);
 	}
 }

@@ -184,13 +184,8 @@ export function renderSubagentResult(
 				const step = steps[i]!;
 				const isLast = i === steps.length - 1;
 				const branch = isLast ? "└─ " : "├─ ";
-				const num = `${i + 1}. `;
 				container.addChild(
-					new Text(
-						`  ${theme.fg("muted", branch)}${theme.fg("dim", num)}${formatSubagentToolCall(step.name, step.args, theme)}`,
-						0,
-						0,
-					),
+					new Text(`  ${theme.fg("muted", branch)}${formatSubagentToolCall(step.name, step.args, theme)}`, 0, 0),
 				);
 			}
 		}
@@ -225,8 +220,7 @@ export function renderSubagentResult(
 			const step = toShow[i]!;
 			const isLast = i === toShow.length - 1;
 			const branch = isLast ? "└─ " : "├─ ";
-			const globalIndex = steps.length - toShow.length + i + 1;
-			text += `\n  ${theme.fg("muted", branch)}${theme.fg("dim", `${globalIndex}. `)}${formatSubagentToolCall(step.name, step.args, theme)}`;
+			text += `\n  ${theme.fg("muted", branch)}${formatSubagentToolCall(step.name, step.args, theme)}`;
 		}
 		if (steps.length > COLLAPSED_ITEM_COUNT || details.finalText) {
 			const key = keyText("app.tools.expand") || "ctrl+o";

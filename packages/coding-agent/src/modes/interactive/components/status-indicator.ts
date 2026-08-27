@@ -1,4 +1,5 @@
 import { type Component, Loader, type TUI } from "@earendil-works/pi-tui";
+import chalk from "chalk";
 import type { WorkingIndicatorOptions } from "../../../core/extensions/index.ts";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
@@ -103,6 +104,8 @@ export class WorkingStatusIndicator extends StatusIndicator {
 	private startedAt: number | undefined;
 	private outputTokens = 0;
 	private elapsedInterval: NodeJS.Timeout | undefined;
+	private textAnimationFrame = 0;
+	private textSweepInterval: NodeJS.Timeout | undefined;
 
 	constructor(
 		ui: TUI,
@@ -119,6 +122,12 @@ export class WorkingStatusIndicator extends StatusIndicator {
 			indicator ?? createDefaultWorkingIndicator(),
 		);
 		this.baseMessage = message;
+		this.textSweepInterval = setInterval(() => {
+			if (this.baseMessage.length > 0) {
+				this.textAnimationFrame++;
+				this.updateDisplay();
+			}
+		}, 220);
 		if (progress) {
 			this.setProgress(progress.startedAt, progress.outputTokens);
 		}
@@ -131,6 +140,31 @@ export class WorkingStatusIndicator extends StatusIndicator {
 
 	override setIndicator(indicator?: WorkingIndicatorOptions): void {
 		super.setIndicator(indicator ?? createDefaultWorkingIndicator());
+	}
+
+	override renderMessage(message: string): string {
+		if (!this.baseMessage) {
+			return theme.fg("accent", message);
+		}
+
+		const messageParts = Array.from(this.baseMessage);
+		if (messageParts.length === 0 || !message.startsWith(this.baseMessage)) {
+			return theme.fg("accent", message);
+		}
+
+		const sweepPosition = this.textAnimationFrame % messageParts.length;
+		const highlighted = messageParts.map((character, index) =>
+			index === sweepPosition ? theme.bold(character) : character,
+		);
+		const accentedBaseMessage = theme.fg("accent", highlighted.join(""));
+		const pulsePhase = Math.floor(this.textAnimationFrame / 3) % 4;
+		const animatedBaseMessage =
+			pulsePhase === 0
+				? chalk.dim(accentedBaseMessage)
+				: pulsePhase === 2
+					? theme.bold(accentedBaseMessage)
+					: accentedBaseMessage;
+		return animatedBaseMessage + theme.fg("text", message.slice(this.baseMessage.length));
 	}
 
 	setProgress(startedAt: number, outputTokens: number): void {
@@ -158,6 +192,10 @@ export class WorkingStatusIndicator extends StatusIndicator {
 		if (this.elapsedInterval) {
 			clearInterval(this.elapsedInterval);
 			this.elapsedInterval = undefined;
+		}
+		if (this.textSweepInterval) {
+			clearInterval(this.textSweepInterval);
+			this.textSweepInterval = undefined;
 		}
 		super.dispose();
 	}
