@@ -142,13 +142,13 @@ describe("goal extension", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("registers tools, command, entry renderer, and lifecycle handlers", () => {
+	it("registers tools, command, and lifecycle handlers without transcript goal entries", () => {
 		const h = setup();
 		expect(h.tools.has("get_goal")).toBe(true);
 		expect(h.tools.has("create_goal")).toBe(true);
 		expect(h.tools.has("update_goal")).toBe(true);
 		expect(h.commands.has("goal")).toBe(true);
-		expect(h.renderers.has(GOAL_CUSTOM_TYPE)).toBe(true);
+		expect(h.renderers.has(GOAL_CUSTOM_TYPE)).toBe(false);
 		for (const event of ["session_start", "before_agent_start", "agent_start", "turn_end", "agent_settled"]) {
 			expect(h.handlers.has(event)).toBe(true);
 		}

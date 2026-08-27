@@ -22,7 +22,6 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
 import { defineTool } from "../../core/extensions/types.ts";
@@ -309,16 +308,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
 				}
 			}
 		},
-	});
-
-	// Compact rendering of persisted goal snapshots in the transcript.
-	pi.registerEntryRenderer<GoalState>(GOAL_CUSTOM_TYPE, (entry, _options, theme) => {
-		const state = entry.data;
-		if (!state || (state as unknown as { status: string }).status === "cleared") return undefined;
-		const statusColor = state.status === "complete" ? "success" : state.status === "blocked" ? "warning" : "accent";
-		const line = `[goal] ${state.objective} · ${state.status}`;
-		const text = theme.fg(statusColor as "success" | "warning" | "accent", line);
-		return new Text(text, 0, 0);
 	});
 
 	// =========================================================================
