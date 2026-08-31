@@ -140,6 +140,7 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import { StartupPanel } from "./components/startup-panel.ts";
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
@@ -961,13 +962,9 @@ export class InteractiveMode {
 
 		await this.themeController.applyFromSettings();
 
-		// Add header with keybindings from config (unless silenced)
+		// Add the responsive welcome panel with keybindings from config (unless silenced).
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
-
-			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
-
 			const expandedInstructions = [
 				hint("app.interrupt", "to interrupt"),
 				hint("app.clear", "to clear"),
@@ -988,31 +985,34 @@ export class InteractiveMode {
 				hint("app.message.dequeue", "to edit all queued messages"),
 				hint("app.clipboard.pasteImage", "to paste image (with text fallback)"),
 				rawKeyHint("drop files", "to attach"),
-			].join("\n");
-			const compactInstructions = [
-				hint("app.interrupt", "interrupt"),
-				rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
-				rawKeyHint("/", "commands"),
-				rawKeyHint("!", "bash"),
-				hint("app.tools.expand", "more"),
-			].join(theme.fg("muted", " · "));
-			const compactOnboarding = theme.fg(
-				"dim",
-				`Press ${keyText("app.tools.expand")} to show full startup help and loaded resources.`,
-			);
-			const onboarding = theme.fg(
-				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
-			);
-			this.builtInHeader = new ExpandableText(
-				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-				() => `${logo}\n${expandedInstructions}\n\n${onboarding}`,
+			];
+			this.builtInHeader = new StartupPanel(
+				{
+					appName: APP_NAME,
+					version: this.version,
+					getModel: () => {
+						const model = this.session.model;
+						return model ? `${model.provider}/${model.id}` : "no model";
+					},
+					getProject: () => this.formatDisplayPath(this.sessionManager.getCwd()),
+					getSession: () => this.sessionManager.getSessionName() ?? this.sessionManager.getSessionId().slice(0, 8),
+					getBranch: () => this.footerDataProvider.getGitBranch(),
+					getResourceSummary: () => this.getStartupResourceSummary(),
+					getResourceDetails: () => this.getStartupResourceDetails(),
+					getCompactHints: () =>
+						[
+							hint("app.interrupt", "interrupt"),
+							rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
+							rawKeyHint("/", "commands"),
+							rawKeyHint("!", "bash"),
+							hint("app.tools.expand", "more"),
+						].join(theme.fg("muted", " · ")),
+					getExpandedHints: () => expandedInstructions,
+					getOnboarding: () => "Ask Pi how to use or extend it.",
+				},
 				this.getStartupExpansionState(),
-				1,
-				0,
 			);
 
-			// Setup UI layout
 			this.headerContainer.addChild(new Spacer(1));
 			this.headerContainer.addChild(this.builtInHeader);
 			this.headerContainer.addChild(new Spacer(1));
@@ -1684,6 +1684,57 @@ export class InteractiveMode {
 		return lines.join("\n");
 	}
 
+	private getStartupResourceSummary(): string {
+		const loader = this.session.resourceLoader;
+		const contextCount =
+			(loader.getSystemPromptSource() ? 1 : 0) +
+			loader.getAppendSystemPromptSources().length +
+			loader.getAgentsFiles().agentsFiles.length;
+		const skillsCount = loader.getSkills().skills.length;
+		const promptsCount = loader.getPrompts().prompts.length;
+		const extensionsCount = loader.getExtensions().extensions.filter((extension) => !extension.hidden).length;
+		const parts = [
+			contextCount > 0 ? `Context ${contextCount}` : undefined,
+			skillsCount > 0 ? `Skills ${skillsCount}` : undefined,
+			promptsCount > 0 ? `Prompts ${promptsCount}` : undefined,
+			extensionsCount > 0 ? `Extensions ${extensionsCount}` : undefined,
+		].filter((part): part is string => part !== undefined);
+		return parts.length > 0 ? parts.join("  ·  ") : "No additional resources";
+	}
+
+	private getStartupResourceDetails(): string[] {
+		const loader = this.session.resourceLoader;
+		const contextFiles = [
+			...(loader.getSystemPromptSource() ? [loader.getSystemPromptSource()!] : []),
+			...loader.getAppendSystemPromptSources(),
+			...loader.getAgentsFiles().agentsFiles,
+		];
+		const skills = loader.getSkills().skills;
+		const prompts = this.session.promptTemplates;
+		const extensions = loader.getExtensions().extensions.filter((extension) => !extension.hidden);
+		const lines: string[] = [];
+		if (contextFiles.length > 0) {
+			lines.push(
+				theme.fg("dim", `Context  ${contextFiles.map((file) => this.formatContextPath(file.path)).join(", ")}`),
+			);
+		}
+		if (skills.length > 0) {
+			lines.push(theme.fg("dim", `Skills   ${skills.map((skill) => skill.name).join(", ")}`));
+		}
+		if (prompts.length > 0) {
+			lines.push(theme.fg("dim", `Prompts  ${prompts.map((prompt) => `/${prompt.name}`).join(", ")}`));
+		}
+		if (extensions.length > 0) {
+			lines.push(
+				theme.fg(
+					"dim",
+					`Extensions ${this.getCompactExtensionLabels(extensions.map((extension) => ({ path: extension.path, sourceInfo: extension.sourceInfo }))).join(", ")}`,
+				),
+			);
+		}
+		return lines;
+	}
+
 	private showLoadedResources(options?: {
 		extensions?: Array<{ path: string; sourceInfo?: SourceInfo }>;
 		force?: boolean;
@@ -1692,8 +1743,10 @@ export class InteractiveMode {
 		// Resource rendering is idempotent; chat clears no longer clear this separate container.
 		this.loadedResourcesContainer.clear();
 
-		const showListing = options?.force || this.options.verbose || !this.settingsManager.getQuietStartup();
-		const showDiagnostics = showListing || options?.showDiagnosticsWhenQuiet === true;
+		// Keep the normal startup surface compact: the panel shows a resource summary.
+		// Full paths remain available through the existing expanded startup view.
+		const showListing = false;
+		const showDiagnostics = options?.showDiagnosticsWhenQuiet === true;
 		if (!showListing && !showDiagnostics) {
 			return;
 		}
@@ -4290,6 +4343,7 @@ export class InteractiveMode {
 		if (expanded === this.toolOutputExpanded) return;
 
 		this.toolOutputExpanded = expanded;
+		this.showLoadedResources({ force: expanded, showDiagnosticsWhenQuiet: true });
 		const activeHeader = this.customHeader ?? this.builtInHeader;
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
