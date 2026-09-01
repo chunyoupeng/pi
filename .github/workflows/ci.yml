@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -11,7 +9,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-check:
+  build-check-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -37,3 +35,6 @@ jobs:
 
       - name: Check
         run: npm run check
+
+      - name: Test
+        run: npm test
