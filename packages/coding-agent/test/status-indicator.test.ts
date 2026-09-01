@@ -9,6 +9,7 @@ import {
 	WorkingStatusIndicator,
 } from "../src/modes/interactive/components/status-indicator.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("status indicators", () => {
 	afterEach(() => {
@@ -59,9 +60,9 @@ describe("status indicators", () => {
 			outputTokens: 1234,
 		});
 
-		expect(indicator.render(80).join("\n")).toContain("Working... (0s · 1.2k tokens)");
+		expect(stripAnsi(indicator.render(80).join("\n"))).toContain("Working... (0s · 1.2k tokens)");
 		vi.advanceTimersByTime(3000);
-		expect(indicator.render(80).join("\n")).toContain("Working... (3s · 1.2k tokens)");
+		expect(stripAnsi(indicator.render(80).join("\n"))).toContain("Working... (3s · 1.2k tokens)");
 
 		const callsBeforeDispose = vi.mocked(tui.requestRender).mock.calls.length;
 		indicator.dispose();

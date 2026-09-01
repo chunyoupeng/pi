@@ -23,6 +23,7 @@ import {
 	createFindTool,
 	createGrepTool,
 	createLsTool,
+	createPowerShellTool,
 	createReadOnlyTools,
 	createReadTool,
 	createSubagentTool,
@@ -135,6 +136,7 @@ export {
 	createGrepTool,
 	createFindTool,
 	createLsTool,
+	createPowerShellTool,
 	createSubagentTool,
 	createSubagentToolDefinition,
 };

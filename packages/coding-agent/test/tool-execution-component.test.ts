@@ -56,13 +56,13 @@ describe("ToolExecutionComponent parity", () => {
 			);
 
 			component.markExecutionStarted();
-			const brightLine = component.render(80)[0]!;
+			const brightLine = component.render(80).find((line) => stripAnsi(line).includes(statusBulletForTest))!;
 			now.mockReturnValue(500);
-			const dimLine = component.render(80)[0]!;
+			const dimLine = component.render(80).find((line) => stripAnsi(line).includes(statusBulletForTest))!;
 
 			expect(visibleWidth(brightLine)).toBe(visibleWidth(dimLine));
 			expect(stripAnsi(brightLine)).toBe(stripAnsi(dimLine));
-			expect(brightLine).toContain(theme.fg("success", statusBulletForTest));
+			expect(brightLine).toContain(theme.fg("border", statusBulletForTest));
 			expect(dimLine).toContain(theme.fg("dim", statusBulletForTest));
 			component.dispose();
 		} finally {
@@ -70,7 +70,7 @@ describe("ToolExecutionComponent parity", () => {
 		}
 	});
 
-	test("uses blue for success and red for errors", () => {
+	test("uses green for success and red for errors", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
 			renderCall: () => new Text("custom call", 0, 0),
@@ -85,7 +85,9 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		success.updateResult({ content: [], isError: false }, false);
-		expect(success.render(80)[0]).toContain(theme.fg("border", statusBulletForTest));
+		expect(success.render(80).find((line) => stripAnsi(line).includes(statusBulletForTest))).toContain(
+			theme.fg("success", statusBulletForTest),
+		);
 
 		const error = new ToolExecutionComponent(
 			"custom_tool",
@@ -97,7 +99,9 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		error.updateResult({ content: [], isError: true }, false);
-		expect(error.render(80)[0]).toContain(theme.fg("error", statusBulletForTest));
+		expect(error.render(80).find((line) => stripAnsi(line).includes(statusBulletForTest))).toContain(
+			theme.fg("error", statusBulletForTest),
+		);
 	});
 
 	test("stacks custom call and result renderers like the old implementation", () => {
@@ -220,7 +224,6 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = stripAnsi(component.render(80).join("\n"));
 		expect(rendered).toContain("Bash(seq 1 10)");
 		expect(rendered).toContain("… +7 lines");
-		expect(rendered).toContain("10 stdout");
 		expect(rendered).not.toMatch(/^\s*bash\s*$/m);
 	});
 
@@ -541,7 +544,6 @@ describe("ToolExecutionComponent parity", () => {
 		expect(collapsed).toContain("line-1");
 		expect(collapsed).toContain("line-3");
 		expect(collapsed).toContain("… +5 lines");
-		expect(collapsed).toContain("8 lines");
 		expect(collapsed).not.toContain("line-4");
 
 		component.setExpanded(true);

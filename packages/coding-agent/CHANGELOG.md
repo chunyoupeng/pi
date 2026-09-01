@@ -4,12 +4,14 @@
 
 ### Added
 
+ - Added `ui_prompt_start` and `ui_prompt_end` extension events so host integrations can distinguish active agent work from waiting on user-facing `ctx.ui` prompts ([#5329](https://github.com/earendil-works/pi/issues/5329)).
  - Added a pulsing green status bullet for the tool call gutter while a tool is executing.
  - Added one horizontal rule per user turn after its tool-call rows and before the final assistant response.
  - Added transcript usage notices for compaction and branch summaries when cache miss notices are enabled.
  - Added fullscreen transcript search with `Ctrl+Shift+F`, incremental match highlighting, configurable search match theme colors, and next/previous navigation with `Enter`/`Ctrl+G` and `Shift+Enter`/`Ctrl+Shift+G`.
  - Added experimental strict JSON-schema constrained sampling for the default `read`, `bash`, `edit`, and `write` tools under `PI_EXPERIMENTAL=1`.
  - Added a fullscreen exit output setting to choose between printing the final transcript and only a session resume hint.
+ - Added `fullscreenCopyOnSelect` to disable automatic fullscreen selection copy; when disabled, `Ctrl+X` copies the active text selection before falling back to the last assistant message, while `/tree` still copies the selected message ([#7720](https://github.com/earendil-works/pi/issues/7720)).
 
 ### Changed
 

@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
 	AssistantMessageComponent,
 	stripThinkingTagBlocks,
@@ -166,6 +166,7 @@ describe("AssistantMessageComponent", () => {
 
 	test("identifies partial assistant Markdown as streaming", () => {
 		initTheme("dark");
+		vi.useFakeTimers();
 		const streamingStates: boolean[] = [];
 		// Trailing paragraph break so the fork's streaming throttle flushes immediately.
 		const message = createAssistantMessage([{ type: "text", text: "partial\n\n" }]);
@@ -176,12 +177,17 @@ describe("AssistantMessageComponent", () => {
 			},
 		]);
 
+		component.setStreaming(true);
 		component.updateContent(message, true);
+		vi.advanceTimersByTime(2024);
 		expect(stripAnsi(component.render(80).join("\n"))).not.toContain("transformed");
 
+		component.setStreaming(false);
 		component.updateContent(message, false);
 		expect(stripAnsi(component.render(80).join("\n"))).toContain("partial transformed");
 		expect(streamingStates).toEqual([true, false]);
+		component.dispose();
+		vi.useRealTimers();
 	});
 
 	test("reapplies Markdown transformers when available width changes", () => {

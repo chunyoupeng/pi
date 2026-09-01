@@ -13,10 +13,12 @@ const originalSkipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 
 beforeEach(() => {
 	allowNetwork();
+	delete process.env.PI_SKIP_VERSION_CHECK;
 });
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.unstubAllEnvs();
 	if (originalSkipVersionCheck === undefined) {
 		delete process.env.PI_SKIP_VERSION_CHECK;
 	} else {
