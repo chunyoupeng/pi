@@ -46,6 +46,10 @@
         {
           "title": "Goals",
           "path": "goal.md"
+        },
+        {
+          "title": "Inline todo lists",
+          "path": "todo.md"
         }
       ]
     },

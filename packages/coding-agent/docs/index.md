@@ -43,6 +43,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
 - [llama.cpp](llama-cpp.md) - run a local router and manage models with `/llama`.
 - [Goals](goal.md) - persistent goals with `/goal` and auto-continuation.
+- [Inline todo lists](todo.md) - persistent checkbox lists for multi-step work.
 - [Security](security.md) - project trust, sandbox boundaries, and vulnerability reporting.
 - [Containerization](containerization.md) - sandbox pi with Gondolin, Docker, or OpenShell.
 - [Settings](settings.md) - global and project settings.
