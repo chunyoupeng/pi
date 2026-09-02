@@ -141,8 +141,9 @@ export function isTodoComplete(state: TodoState): boolean {
 }
 
 /**
- * Render a compact panel above the editor. The initial state deliberately uses
- * only empty boxes; completed items change to checked boxes and are crossed out.
+ * Render the original todo panel style as a snapshot in the conversation
+ * transcript. Unlike a widget, every snapshot remains visible after the next
+ * tool call.
  */
 export function renderTodoLines(state: TodoState, theme: Theme): string[] {
 	const completed = completedTodoCount(state);

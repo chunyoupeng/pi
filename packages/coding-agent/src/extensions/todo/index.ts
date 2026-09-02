@@ -2,23 +2,23 @@
  * Built-in persistent inline todo list.
  *
  * The list is stored as session custom entries, so it follows the active
- * branch. Its widget is updated only when the list snapshot changes.
+ * branch. Each tool result renders the current list snapshot in the chat
+ * transcript; snapshots are not replaced by a live widget.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "../../core/extensions/types.ts";
+import type {
+	AgentToolResult,
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "../../core/extensions/types.ts";
 import { defineTool } from "../../core/extensions/types.ts";
+import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { TodoManager } from "./manager.ts";
-import {
-	completedTodoCount,
-	renderTodoLines,
-	TODO_CONTEXT_CUSTOM_TYPE,
-	TODO_CUSTOM_TYPE,
-	TODO_STATUS_KEY,
-	TODO_WIDGET_KEY,
-	type TodoState,
-} from "./state.ts";
+import { isTodoState, renderTodoLines, TODO_CONTEXT_CUSTOM_TYPE, TODO_CUSTOM_TYPE, type TodoState } from "./state.ts";
 
 const CreateTodoListParams = Type.Object({
 	items: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Todo items in execution order." }),
@@ -40,42 +40,26 @@ function textResult(text: string, details: Record<string, unknown> = {}) {
 	return { content: [{ type: "text" as const, text }], details };
 }
 
+function renderTodoResult(result: AgentToolResult<unknown>, theme: Theme): Text {
+	if (isTodoState(result.details)) {
+		return new Text(renderTodoLines(result.details, theme).join("\n"), 0, 0);
+	}
+
+	const text = result.content.find((content) => content.type === "text")?.text ?? "";
+	return new Text(text, 0, 0);
+}
+
 export default function todoExtension(pi: ExtensionAPI): void {
 	let currentCtx: ExtensionContext | undefined;
-	let lastRenderedSignature: string | undefined;
 
 	const useCtx = (ctx: ExtensionContext): void => {
 		currentCtx = ctx;
-	};
-
-	const renderWidget = (): void => {
-		const ctx = currentCtx;
-		if (!ctx || !ctx.hasUI) return;
-
-		const state = manager.getState();
-		// A completed list remains persisted for history, but no longer occupies
-		// the editor area. It can still be inspected with /todo or get_todos.
-		const lines = state && !state.items.every((item) => item.done) ? renderTodoLines(state, ctx.ui.theme) : undefined;
-		const signature = lines === undefined ? "<hidden>" : lines.join("\n");
-		if (signature === lastRenderedSignature) return;
-		lastRenderedSignature = signature;
-
-		ctx.ui.setWidget(TODO_WIDGET_KEY, lines);
-		if (state && lines) {
-			ctx.ui.setStatus(
-				TODO_STATUS_KEY,
-				ctx.ui.theme.fg("muted", `Todos ${completedTodoCount(state)}/${state.items.length}`),
-			);
-		} else {
-			ctx.ui.setStatus(TODO_STATUS_KEY, undefined);
-		}
 	};
 
 	const manager = new TodoManager({
 		persist: (entry) =>
 			pi.appendEntry<TodoState | { status: "cleared"; clearedAt: number; listId?: string }>(TODO_CUSTOM_TYPE, entry),
 		notify: (message, type) => currentCtx?.ui.notify(message, type),
-		onStateChange: renderWidget,
 	});
 
 	pi.registerTool(
@@ -88,6 +72,9 @@ export default function todoExtension(pi: ExtensionAPI): void {
 				useCtx(ctx);
 				const state = manager.getState();
 				return textResult(state ? JSON.stringify(state, null, 2) : "null", state ? { ...state } : {});
+			},
+			renderResult(result, _options, theme) {
+				return renderTodoResult(result, theme);
 			},
 		}),
 	);
@@ -115,6 +102,9 @@ export default function todoExtension(pi: ExtensionAPI): void {
 					isError: result === "refused" || result === "noop",
 				};
 			},
+			renderResult(result, _options, theme) {
+				return renderTodoResult(result, theme);
+			},
 		}),
 	);
 
@@ -138,6 +128,9 @@ export default function todoExtension(pi: ExtensionAPI): void {
 					isError: result !== "added",
 				};
 			},
+			renderResult(result, _options, theme) {
+				return renderTodoResult(result, theme);
+			},
 		}),
 	);
 
@@ -158,6 +151,9 @@ export default function todoExtension(pi: ExtensionAPI): void {
 					),
 					isError: result !== "updated" && result !== "noop",
 				};
+			},
+			renderResult(result, _options, theme) {
+				return renderTodoResult(result, theme);
 			},
 		}),
 	);
@@ -189,20 +185,17 @@ export default function todoExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		useCtx(ctx);
-		lastRenderedSignature = undefined;
 		manager.restore(ctx.sessionManager.getBranch());
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
 		useCtx(ctx);
-		lastRenderedSignature = undefined;
 		manager.restore(ctx.sessionManager.getBranch());
 	});
 
 	pi.on("context", async (event, ctx) => {
-		// Rebuild this message on every provider request. A list may change in a
-		// tool call, a goal continuation, or a command; retaining the old hidden
-		// snapshot would make the model act on stale checkboxes.
+		// Rebuild this message on every provider request so the model sees the
+		// current state after every tool update.
 		useCtx(ctx);
 		const existingIndex = event.messages.findIndex(
 			(message) => message.role === "custom" && message.customType === TODO_CONTEXT_CUSTOM_TYPE,

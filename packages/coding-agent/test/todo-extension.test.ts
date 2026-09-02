@@ -7,7 +7,12 @@ interface Harness {
 	handlers: Map<string, (...args: unknown[]) => unknown>;
 	tools: Map<
 		string,
-		{ execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; isError?: boolean }> }
+		{
+			execute: (
+				...args: unknown[]
+			) => Promise<{ content: Array<{ text: string }>; details?: unknown; isError?: boolean }>;
+			renderResult?: (...args: unknown[]) => { render: (width: number) => string[] };
+		}
 	>;
 	entries: Array<{ data: unknown }>;
 	setWidget: ReturnType<typeof vi.fn>;
@@ -18,7 +23,12 @@ function setup(): Harness {
 	const handlers = new Map<string, (...args: unknown[]) => unknown>();
 	const tools = new Map<
 		string,
-		{ execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; isError?: boolean }> }
+		{
+			execute: (
+				...args: unknown[]
+			) => Promise<{ content: Array<{ text: string }>; details?: unknown; isError?: boolean }>;
+			renderResult?: (...args: unknown[]) => { render: (width: number) => string[] };
+		}
 	>();
 	const entries: Array<{ data: unknown }> = [];
 	const setWidget = vi.fn();
@@ -51,30 +61,38 @@ function setup(): Harness {
 }
 
 describe("todo extension", () => {
-	it("renders only when the todo state changes", async () => {
+	it("renders every todo tool result as a transcript snapshot", async () => {
 		const h = setup();
 		const ctx = h.makeCtx();
 		await h.handlers.get("session_start")!({}, ctx);
 		const create = h.tools.get("create_todo_list")!;
-		h.setWidget.mockClear();
-		await create.execute("call", { items: ["Build UI"] }, undefined, undefined, ctx);
-		expect(h.setWidget).toHaveBeenCalledTimes(1);
-		await h.tools.get("get_todos")!.execute("read", {}, undefined, undefined, ctx);
-		expect(h.setWidget).toHaveBeenCalledTimes(1);
+		const createResult = await create.execute("call", { items: ["Build UI"] }, undefined, undefined, ctx);
+		const renderedCreate = create.renderResult!(createResult, {}, ctx.ui.theme, {});
+		expect(renderedCreate.render(80).map((line) => line.trimEnd())).toEqual([
+			"  ┌─ TODO LIST · 0/1",
+			"  │ ☐ Build UI",
+			"  └─ 1 remaining",
+		]);
+
 		const state = h.entries[0]!.data as { listId: string; items: Array<{ id: string }> };
-		await h.tools
-			.get("update_todo_item")!
-			.execute(
-				"update",
-				{ listId: state.listId, itemId: state.items[0]!.id, status: "complete" },
-				undefined,
-				undefined,
-				ctx,
-			);
-		expect(h.setWidget).toHaveBeenCalledTimes(2);
+		const update = h.tools.get("update_todo_item")!;
+		const updateResult = await update.execute(
+			"update",
+			{ listId: state.listId, itemId: state.items[0]!.id, status: "complete" },
+			undefined,
+			undefined,
+			ctx,
+		);
+		const renderedUpdate = update.renderResult!(updateResult, {}, ctx.ui.theme, {});
+		expect(renderedUpdate.render(80).map((line) => line.trimEnd())).toEqual([
+			"  ┌─ ✓ TODO DONE · 1/1",
+			"  │ ☑ Build UI",
+			"  └─ All tasks complete",
+		]);
+		expect(h.setWidget).not.toHaveBeenCalled();
 	});
 
-	it("renders empty then checked boxes and exposes IDs", async () => {
+	it("keeps the final checked snapshot visible", async () => {
 		const h = setup();
 		const ctx = h.makeCtx();
 		const create = h.tools.get("create_todo_list")!;
@@ -82,14 +100,19 @@ describe("todo extension", () => {
 		expect(result.content[0]!.text).toContain("listId:");
 		const state = h.entries[0]!.data as { listId: string; items: Array<{ id: string }> };
 		const update = h.tools.get("update_todo_item")!;
-		await update.execute(
+		const updateResult = await update.execute(
 			"call-2",
 			{ listId: state.listId, itemId: state.items[0]!.id, status: "complete" },
 			undefined,
 			undefined,
 			ctx,
 		);
-		expect(h.setWidget.mock.calls.at(-1)?.[1]).toBeUndefined();
+		const rendered = update.renderResult!(updateResult, {}, ctx.ui.theme, {});
+		expect(rendered.render(80).map((line) => line.trimEnd())).toEqual([
+			"  ┌─ ✓ TODO DONE · 1/1",
+			"  │ ☑ Build UI",
+			"  └─ All tasks complete",
+		]);
 	});
 
 	it("replaces stale hidden context with the current snapshot", async () => {

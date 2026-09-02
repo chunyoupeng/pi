@@ -21,7 +21,7 @@ function entry(data: unknown): SessionEntry {
 }
 
 describe("todo state", () => {
-	it("creates unchecked items and renders a compact panel", () => {
+	it("creates unchecked items and renders the original todo panel", () => {
 		const state = createTodoState(["Inspect code", "Run checks"], 1000);
 		expect(state.items.every((item) => !item.done)).toBe(true);
 		expect(renderTodoLines(state, theme as never)).toEqual([
