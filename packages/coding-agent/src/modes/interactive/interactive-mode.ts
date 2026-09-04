@@ -117,6 +117,7 @@ import { AssistantMessageComponent, estimateAssistantOutputTokens } from "./comp
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
+import { ContextPanelComponent } from "./components/context-panel.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
@@ -3123,6 +3124,11 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/context") {
+				this.showContextPanel();
+				this.editor.setText("");
+				return;
+			}
 			if (text === "/changelog") {
 				this.handleChangelogCommand();
 				this.editor.setText("");
@@ -4709,6 +4715,20 @@ export class InteractiveMode {
 		this.editorContainer.addChild(created.component);
 		this.ui.setFocus(created.focus);
 		this.ui.requestRender();
+	}
+
+	private showContextPanel(): void {
+		this.showSelector((done) => {
+			const panel = new ContextPanelComponent(
+				this.session,
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				this.ui.terminal.rows,
+			);
+			return { component: panel, focus: panel };
+		});
 	}
 
 	private showSettingsSelector(): void {
