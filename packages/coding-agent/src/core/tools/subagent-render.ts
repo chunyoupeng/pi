@@ -186,7 +186,11 @@ export function renderSubagentResult(
 	}
 
 	const isError = context.isError || details.status === "error" || details.status === "aborted";
-	const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+	const icon = isError
+		? theme.fg("error", "✗")
+		: details.status === "completed" && !options.isPartial
+			? theme.fg("success", "✓")
+			: theme.fg("muted", "○");
 	const steps = details.steps ?? [];
 	const sourceLabel = details.source ? theme.fg("muted", ` (${details.source})`) : "";
 	const badge = formatAgentBadge(details.agent, details.name, theme);

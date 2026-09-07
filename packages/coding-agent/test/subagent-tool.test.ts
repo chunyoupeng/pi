@@ -220,6 +220,35 @@ Write unit tests.`;
 			expect(expanded).toBeInstanceOf(Container);
 		});
 
+		it.each([
+			{ status: "running", isPartial: true, isError: false, color: "muted", icon: "○" },
+			{ status: "running", isPartial: false, isError: false, color: "muted", icon: "○" },
+			{ status: "completed", isPartial: true, isError: false, color: "muted", icon: "○" },
+			{ status: "completed", isPartial: false, isError: false, color: "success", icon: "✓" },
+			{ status: "error", isPartial: false, isError: false, color: "error", icon: "✗" },
+			{ status: "aborted", isPartial: false, isError: false, color: "error", icon: "✗" },
+			{ status: "completed", isPartial: false, isError: true, color: "error", icon: "✗" },
+		] as const)(
+			"should render $status (partial=$isPartial, error=$isError) as $icon",
+			({ status, isPartial, isError, color, icon }) => {
+				for (const expanded of [false, true]) {
+					const component = renderSubagentResult(
+						{
+							content: [],
+							details: { agent: "scout", task: "Explore code", status },
+						},
+						{ expanded, isPartial },
+						theme,
+						{ isError } as Parameters<typeof renderSubagentResult>[3],
+					);
+					const header = component.render(80)[0]!;
+					expect(header).toContain(theme.fg(color, icon));
+					expect(stripAnsi(header).trimStart().startsWith(`${icon} `)).toBe(true);
+					if (icon !== "✓") expect(stripAnsi(header)).not.toContain("✓");
+				}
+			},
+		);
+
 		it("should render call preview with sessionId and resetSession", () => {
 			const comp = renderSubagentCall(
 				{ agent: "worker", task: "Continue refactoring", sessionId: "worker-jack-1234", resetSession: true },

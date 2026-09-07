@@ -6,6 +6,10 @@
 
 - Added a `TuiAltScreen` `copyOnSelect` option plus helpers to detect and copy the active fullscreen text selection programmatically ([#7720](https://github.com/earendil-works/pi/issues/7720)).
 
+### Changed
+
+- Optimized fullscreen transcript search to scale linearly by tokenizing common ASCII text runs and indexing searchable lines.
+
 ### Fixed
 
 - Fixed duplicate fullscreen right-click paste in VS Code-based terminals on Windows ([#8186](https://github.com/earendil-works/pi/issues/8186)).
