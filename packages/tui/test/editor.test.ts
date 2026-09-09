@@ -4151,4 +4151,47 @@ describe("Editor component", () => {
 			assert.strictEqual(submitted, pastedText);
 		});
 	});
+
+	describe("Lifecycle and disposal", () => {
+		it("unsubscribes from terminal focus changes on dispose", () => {
+			let listenerCount = 0;
+			const mockTui = {
+				...createTestTUI(),
+				onTerminalFocusChange: () => {
+					listenerCount++;
+					return () => {
+						listenerCount--;
+					};
+				},
+				getTerminalFocused: () => true,
+			};
+
+			const editor = new Editor(mockTui as unknown as TUI, defaultEditorTheme);
+			assert.strictEqual(listenerCount, 1);
+
+			editor.dispose();
+			assert.strictEqual(listenerCount, 0);
+		});
+
+		it("supports maxVisibleLines option and setMaxVisibleLines dynamic sizing", () => {
+			const mockTui = createTestTUI();
+			const editor = new Editor(mockTui, defaultEditorTheme, { maxVisibleLines: 2 });
+			assert.strictEqual(editor.getMaxVisibleLines(), 2);
+
+			editor.setText("Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
+			// With maxVisibleLines = 2, render should produce: top border (1) + 2 content lines + bottom border (1) = 4 lines
+			const rendered = editor.render(80);
+			assert.strictEqual(rendered.length, 4);
+
+			// Dynamically adjust to 4 lines
+			editor.setMaxVisibleLines(4);
+			assert.strictEqual(editor.getMaxVisibleLines(), 4);
+			const rendered4 = editor.render(80);
+			assert.strictEqual(rendered4.length, 6);
+
+			// Clear custom max lines
+			editor.setMaxVisibleLines(undefined);
+			assert.strictEqual(editor.getMaxVisibleLines(), undefined);
+		});
+	});
 });

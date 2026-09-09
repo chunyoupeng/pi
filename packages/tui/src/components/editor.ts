@@ -235,6 +235,8 @@ export interface EditorOptions {
 	autocompleteMaxVisible?: number;
 	/** Prefix rendered before the first line of input (e.g. "❯ "). Wrapped lines are indented to match. */
 	promptPrefix?: string;
+	/** Maximum number of content lines visible in the editor before scrolling. */
+	maxVisibleLines?: number;
 }
 
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
@@ -365,6 +367,8 @@ export class Editor implements Component, Focusable {
 	public onChange?: (text: string) => void;
 	public disableSubmit: boolean = false;
 
+	private maxVisibleLines?: number;
+
 	constructor(tui: TUI, theme: EditorTheme, options: EditorOptions = {}) {
 		this.tui = tui;
 		this.theme = theme;
@@ -374,10 +378,15 @@ export class Editor implements Component, Focusable {
 		this.promptPrefix = options.promptPrefix ?? "";
 		const maxVisible = options.autocompleteMaxVisible ?? 5;
 		this.autocompleteMaxVisible = Number.isFinite(maxVisible) ? Math.max(3, Math.min(20, Math.floor(maxVisible))) : 5;
+		if (options.maxVisibleLines !== undefined && Number.isFinite(options.maxVisibleLines)) {
+			this.maxVisibleLines = Math.max(1, Math.floor(options.maxVisibleLines));
+		}
 		// Pause blinking (and hide the cursor) while the terminal window/pane
 		// itself is unfocused, so only the active pane shows a cursor.
-		this.tui.onTerminalFocusChange(() => this.syncBlink());
+		this.unsubscribeTerminalFocus = this.tui.onTerminalFocusChange?.(() => this.syncBlink());
 	}
+
+	private unsubscribeTerminalFocus?: () => void;
 
 	/** Set of currently valid paste IDs, for marker-aware segmentation. */
 	private validPasteIds(): Set<number> {
@@ -387,6 +396,19 @@ export class Editor implements Component, Focusable {
 	/** Segment text with paste-marker awareness, only merging markers with valid IDs. */
 	private segment(text: string, mode: "word" | "grapheme"): Iterable<Intl.SegmentData> {
 		return segmentWithMarkers(text, mode === "word" ? wordSegmenter : graphemeSegmenter, this.validPasteIds());
+	}
+
+	getMaxVisibleLines(): number | undefined {
+		return this.maxVisibleLines;
+	}
+
+	setMaxVisibleLines(maxLines: number | undefined): void {
+		const newMaxLines =
+			maxLines !== undefined && Number.isFinite(maxLines) ? Math.max(1, Math.floor(maxLines)) : undefined;
+		if (this.maxVisibleLines !== newMaxLines) {
+			this.maxVisibleLines = newMaxLines;
+			this.tui.requestRender();
+		}
 	}
 
 	getPaddingX(): number {
@@ -541,6 +563,15 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
+	dispose(): void {
+		this.stopBlink();
+		this.cancelAutocomplete();
+		if (this.unsubscribeTerminalFocus) {
+			this.unsubscribeTerminalFocus();
+			this.unsubscribeTerminalFocus = undefined;
+		}
+	}
+
 	render(width: number): string[] {
 		const prefixWidth = this.promptPrefix ? visibleWidth(this.promptPrefix) : 0;
 		const maxPadding = Math.max(0, Math.floor((width - 1 - prefixWidth) / 2));
@@ -559,9 +590,9 @@ export class Editor implements Component, Focusable {
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
 
-		// Calculate max visible lines: 30% of terminal height, minimum 5 lines
+		// Calculate max visible lines: custom setting if provided, or 30% of terminal height, minimum 5 lines
 		const terminalRows = this.tui.terminal.rows;
-		const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
+		const maxVisibleLines = this.maxVisibleLines ?? Math.max(5, Math.floor(terminalRows * 0.3));
 
 		// Find the cursor line index in layoutLines
 		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);

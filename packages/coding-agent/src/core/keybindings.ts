@@ -54,6 +54,8 @@ export interface AppKeybindings {
 	"app.tree.filter.all": true;
 	"app.tree.filter.cycleForward": true;
 	"app.tree.filter.cycleBackward": true;
+	"app.btw.cancel": true;
+	"app.btw.close": true;
 }
 
 export type AppKeybinding = keyof AppKeybindings;
@@ -230,7 +232,17 @@ export const KEYBINDINGS = {
 		defaultKeys: "shift+ctrl+o",
 		description: "Tree filter: cycle backward",
 	},
+	"app.btw.cancel": {
+		defaultKeys: "ctrl+c",
+		description: "Cancel side question stream",
+	},
+	"app.btw.close": {
+		defaultKeys: "escape",
+		description: "Return to main conversation",
+	},
 } as const satisfies KeybindingDefinitions;
+
+export const DEFAULT_APP_KEYBINDINGS = KEYBINDINGS;
 
 const KEYBINDING_NAME_MIGRATIONS = {
 	cursorUp: "tui.editor.cursorUp",
@@ -273,6 +285,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	cycleModelBackward: "app.model.cycleBackward",
 	selectModel: "app.model.select",
 	expandTools: "app.tools.expand",
+	"app.expandTools": "app.tools.expand",
 	toggleThinking: "app.thinking.toggle",
 	toggleSessionNamedFilter: "app.session.toggleNamedFilter",
 	externalEditor: "app.editor.external",
@@ -367,7 +380,8 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	private configPath: string | undefined;
 
 	constructor(userBindings: KeybindingsConfig = {}, configPath?: string) {
-		super(KEYBINDINGS, userBindings);
+		const migrated = migrateKeybindingsConfig(userBindings as Record<string, unknown>).config;
+		super(KEYBINDINGS, toKeybindingsConfig(migrated));
 		this.configPath = configPath;
 	}
 
