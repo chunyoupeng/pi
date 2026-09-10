@@ -185,7 +185,8 @@ export function renderSubagentResult(
 		return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 	}
 
-	const isError = context.isError || details.status === "error" || details.status === "aborted";
+	const isError =
+		context.isError || details.status === "error" || details.status === "aborted" || details.status === "timed_out";
 	const icon = isError
 		? theme.fg("error", "✗")
 		: details.status === "completed" && !options.isPartial

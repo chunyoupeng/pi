@@ -15,6 +15,7 @@ export interface SubagentSession {
 
 export class SubagentSessionPool {
 	private _sessions: Map<string, SubagentSession>;
+	private busySessions = new Set<string>();
 
 	constructor() {
 		this._sessions = new Map<string, SubagentSession>();
@@ -30,6 +31,20 @@ export class SubagentSessionPool {
 
 	has(sessionId: string): boolean {
 		return this._sessions.has(sessionId);
+	}
+
+	acquire(sessionId: string): () => void {
+		this.assertIdle(sessionId);
+		this.busySessions.add(sessionId);
+		return () => {
+			this.busySessions.delete(sessionId);
+		};
+	}
+
+	private assertIdle(sessionId: string): void {
+		if (this.busySessions.has(sessionId) || this._sessions.get(sessionId)?.subAgent.signal) {
+			throw new Error(`Subagent session '${sessionId}' is busy; wait until it is idle before resuming or resetting`);
+		}
 	}
 
 	delete(sessionId: string): boolean {

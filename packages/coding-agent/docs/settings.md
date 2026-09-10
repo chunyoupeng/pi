@@ -235,6 +235,27 @@ Windows paths in JSON must use forward slashes or escaped backslashes:
 
 An empty array starts with no built-in tools while preserving extension and SDK custom tools. `--tools` replaces this behavior with a strict allowlist for all tools, `--no-tools` disables all tools, and `--no-builtin-tools` disables the built-in defaults. `--exclude-tools` filters the resulting list. A project `defaultTools` array replaces the global array.
 
+### Subagents
+
+Disable an individual role by adding `disabled: true` to its Markdown frontmatter. For example, put this in `~/.pi/agent/agents/worker.md` (all projects) or `.pi/agents/worker.md` (this project):
+
+```markdown
+---
+name: worker
+disabled: true
+---
+```
+
+To disable `reviewer`, use `reviewer.md` with `name: reviewer`. If `name` is omitted, the filename supplies it. Only the YAML boolean `true` disables a role; the string `"true"` does not.
+
+Disabled roles are excluded from the available-role list and cannot be called or resumed. Other roles remain available. Profiles keep their existing precedence: built-in < user Markdown < project Markdown < SDK `customProfiles`. Filtering happens after merging, so a higher-priority profile without `disabled: true` can re-enable a role. Removing a disabling file restores the lower-priority profile; disabling every role leaves no available roles rather than falling back to built-ins.
+
+The tool re-reads profiles on each call, including resumes. Restart Pi to refresh the advertised role list after editing these files. Disabling a role does not interrupt a call that is already running.
+
+Subagent calls accept `timeout` in seconds: default 180, recommended 180-300, maximum 600. The main agent should assign one small, independently verifiable subtask per call, not an entire large task. At the deadline, the subagent interrupts work and returns a summary of completed work, verification, and what remains. Cancellation and summary have at most 30 seconds; the entire call, including authentication and summary, cannot exceed 600 seconds. A timeout above 570 therefore stops work at 570 seconds to reserve summary time.
+
+A `timed_out` result is not task completion. Reuse its `sessionId` for the next small subtask with a fresh time budget. If the summary cannot finish, the result contains recorded partial output and attempted tool calls instead. A tool that has not acknowledged cancellation keeps its session busy until it stops, preventing overlapping resumes or resets.
+
 ### Sessions
 
 | Setting | Type | Default | Description |

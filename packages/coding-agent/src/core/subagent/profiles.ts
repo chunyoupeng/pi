@@ -44,6 +44,7 @@ type AgentFrontmatter = {
 	name?: unknown;
 	description?: unknown;
 	tools?: unknown;
+	disabled?: unknown;
 	model?: unknown;
 	thinkingLevel?: unknown;
 };
@@ -92,6 +93,7 @@ export function loadCustomProfilesFromDir(dir: string, source: "user" | "project
 			name,
 			description,
 			systemPrompt: body || description,
+			disabled: frontmatter.disabled === true,
 			tools: parseToolList(frontmatter.tools) ?? ["read", "grep", "find", "ls"],
 			modelId: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
 			thinkingLevel:
@@ -103,7 +105,11 @@ export function loadCustomProfilesFromDir(dir: string, source: "user" | "project
 	return profiles;
 }
 
-export function resolveSubagentProfiles(cwd: string, agentDir?: string): Record<string, SubagentProfile> {
+export function resolveSubagentProfiles(
+	cwd: string,
+	agentDir?: string,
+	customProfiles?: Record<string, SubagentProfile>,
+): Record<string, SubagentProfile> {
 	const result: Record<string, SubagentProfile> = { ...BUILTIN_SUBAGENT_PROFILES };
 
 	// 1. User-level agents: ~/.pi/agent/agents/*.md
@@ -119,5 +125,7 @@ export function resolveSubagentProfiles(cwd: string, agentDir?: string): Record<
 		result[profile.name] = profile;
 	}
 
-	return result;
+	// Filter only after all overrides: a disabled profile must not fall back to a built-in.
+	Object.assign(result, customProfiles);
+	return Object.fromEntries(Object.entries(result).filter(([, profile]) => profile.disabled !== true));
 }

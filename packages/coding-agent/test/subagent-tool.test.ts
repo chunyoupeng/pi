@@ -227,6 +227,8 @@ Write unit tests.`;
 			{ status: "completed", isPartial: false, isError: false, color: "success", icon: "✓" },
 			{ status: "error", isPartial: false, isError: false, color: "error", icon: "✗" },
 			{ status: "aborted", isPartial: false, isError: false, color: "error", icon: "✗" },
+			{ status: "timed_out", isPartial: false, isError: false, color: "error", icon: "✗" },
+			{ status: "summarizing", isPartial: true, isError: false, color: "muted", icon: "○" },
 			{ status: "completed", isPartial: false, isError: true, color: "error", icon: "✗" },
 		] as const)(
 			"should render $status (partial=$isPartial, error=$isError) as $icon",

@@ -4,6 +4,8 @@
 
 ### Added
 
+ - Added per-role subagent disabling with `disabled: true` in Markdown profiles.
+ - Added subagent work timeouts (180 seconds by default), bounded timeout summaries, and resumable partial results within a 600-second overall limit.
  - Added built-in `/btw` side questions with a fullscreen continuous conversation UI, scrollable transcript, multiline input editor, and isolated multi-turn context.
  - Added a persistent inline todo list with checkbox progress rendered above the editor.
  - Added `ui_prompt_start` and `ui_prompt_end` extension events so host integrations can distinguish active agent work from waiting on user-facing `ctx.ui` prompts ([#5329](https://github.com/earendil-works/pi/issues/5329)).
