@@ -186,18 +186,18 @@ describe("GitHub Copilot OAuth device flow", () => {
 				capabilities: { supports: { tool_calls: true } },
 			},
 			{
-				id: "claude-opus-4.7",
+				id: "policy-disabled-model",
 				model_picker_enabled: false,
 				policy: { state: "disabled" },
 				capabilities: { supports: { tool_calls: true } },
 			},
 			{
-				id: "gpt-5.4-nano",
+				id: "unconfigured-model",
 				model_picker_enabled: false,
 				capabilities: { supports: { tool_calls: true } },
 			},
 			{
-				id: "gpt-4o",
+				id: "tool-incapable-model",
 				model_picker_enabled: false,
 				policy: { state: "enabled" },
 				capabilities: { supports: { tool_calls: false } },

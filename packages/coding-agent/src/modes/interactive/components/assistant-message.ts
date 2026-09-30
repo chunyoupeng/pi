@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
@@ -60,6 +60,7 @@ export class AssistantMessageComponent extends Container {
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;
+	private hiddenThinkingLabel: string;
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
@@ -67,12 +68,13 @@ export class AssistantMessageComponent extends Container {
 	private isStreaming = false;
 	private flushTimer: ReturnType<typeof setTimeout> | undefined;
 	private pendingFlush = false;
+	private thinkingVisibilityOverrides = new Map<number, boolean>();
 
 	constructor(
 		message?: AssistantMessage,
 		hideThinkingBlock = false,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
-		_hiddenThinkingLabel = "Thinking...",
+		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
 	) {
@@ -81,6 +83,7 @@ export class AssistantMessageComponent extends Container {
 		this.hideThinkingBlock = hideThinkingBlock;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
+		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.markdownTransformers = markdownTransformers;
 
 		// Container for text/thinking content
@@ -109,13 +112,16 @@ export class AssistantMessageComponent extends Container {
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
+		this.thinkingVisibilityOverrides.clear();
 		if (this.lastMessage) {
 			this.applyContent(this.lastMessage);
 		}
 	}
 
-	/** Kept for API compatibility; thinking body is no longer labeled when hidden. */
-	setHiddenThinkingLabel(_label: string): void {}
+	setHiddenThinkingLabel(label: string): void {
+		this.hiddenThinkingLabel = label;
+		if (this.lastMessage) this.applyContent(this.lastMessage);
+	}
 
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
@@ -224,6 +230,7 @@ export class AssistantMessageComponent extends Container {
 		}
 
 		// Render content in order
+		let thinkingRunIndex = 0;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text") {
@@ -267,24 +274,34 @@ export class AssistantMessageComponent extends Container {
 							(c.type === "text" && displayText(c.text).trim()) || (c.type === "thinking" && c.thinking.trim()),
 					);
 
+				const runIndex = thinkingRunIndex++;
+				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				const thinkingComponent = hidden
+					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+					: new Markdown(
+							thinkingBlocks.join("\n\n"),
+							this.outputPad,
+							0,
+							this.markdownTheme,
+							{
+								color: (text: string) => theme.fg("thinkingText", text),
+								italic: true,
+							},
+							{
+								transform: createMarkdownTransform(
+									"assistant-thinking",
+									this.isStreaming,
+									this.markdownTransformers,
+								),
+							},
+						);
 				this.contentContainer.addChild(
-					new Markdown(
-						thinkingBlocks.join("\n\n"),
-						this.outputPad,
-						0,
-						this.markdownTheme,
-						{
-							color: (text: string) => theme.fg("thinkingText", text),
-							italic: true,
-						},
-						{
-							transform: createMarkdownTransform(
-								"assistant-thinking",
-								this.isStreaming,
-								this.markdownTransformers,
-							),
-						},
-					),
+					new MouseRegion(thinkingComponent, (event) => {
+						if (event.type !== "click" || event.button !== "left") return undefined;
+						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+						if (this.lastMessage) this.applyContent(this.lastMessage);
+						return { handled: true };
+					}),
 				);
 				if (hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));

@@ -1,5 +1,5 @@
 import { Agent, type AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, InMemoryModelsStore } from "@earendil-works/pi-ai";
+import { type AssistantMessage, getCurrentTools, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import {
 	type FauxResponseFactory,
 	fauxAssistantMessage,
@@ -142,7 +142,7 @@ describe("Subagent timeout", () => {
 		expect(result.details).toMatchObject({ status: "timed_out", timeout: timeout ?? 180 });
 		expect(work.response.mock.calls[0]![1]?.signal?.aborted).toBe(true);
 		expect(summary).toHaveBeenCalledOnce();
-		expect(summary.mock.calls[0]![0].tools).toEqual([]);
+		expect(getCurrentTools(summary.mock.calls[0]![0].messages)).toEqual([]);
 		expect(summary.mock.calls[0]![1]?.reasoning).toBeUndefined();
 		expect(JSON.stringify(summary.mock.calls[0]![0].messages.at(-1))).toContain("You have timed out");
 		expect(result.finalText).toContain("Found the cause; tests remain.");
@@ -322,7 +322,7 @@ describe("Subagent timeout", () => {
 		const first = resultOf(run);
 		expect(first.details.status).toBe("timed_out");
 		expect(JSON.stringify(summary.mock.calls[0]![0].messages)).toContain("No work on this task was started");
-		expect(summary.mock.calls[0]![0].tools).toEqual([]);
+		expect(getCurrentTools(summary.mock.calls[0]![0].messages)).toEqual([]);
 		faux.setResponses([fauxAssistantMessage("Now authenticated")]);
 		const resumed = start({ sessionId: first.details.sessionId, modelRegistry: auth.registry });
 		await vi.advanceTimersByTimeAsync(0);

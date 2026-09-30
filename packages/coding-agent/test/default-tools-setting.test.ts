@@ -70,6 +70,33 @@ describe("defaultTools setting", () => {
 		session.dispose();
 	});
 
+	it("can select powershell instead of bash", async () => {
+		const session = await createSession(["read", "powershell", "edit", "write"]);
+
+		expect(session.getActiveToolNames()).toEqual(["read", "powershell", "edit", "write"]);
+		expect(session.systemPrompt).toContain("- powershell: Execute PowerShell commands");
+		expect(session.systemPrompt).not.toContain("- bash:");
+		session.dispose();
+	});
+
+	it("activates an inactive extension tool with +name", async () => {
+		const session = await createSession(["+inactive_tool", "-write"], {}, [
+			(pi) => {
+				pi.registerTool({
+					name: "inactive_tool",
+					label: "Inactive Tool",
+					description: "Extension tool registered inactive",
+					parameters: Type.Object({}),
+					execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+					defaultActive: false,
+				});
+			},
+		]);
+
+		expect(session.getActiveToolNames().sort()).toEqual(["bash", "edit", "inactive_tool", "read", "subagent"]);
+		session.dispose();
+	});
+
 	it("keeps extension and SDK custom tools enabled", async () => {
 		const session = await createSession(
 			["grep"],

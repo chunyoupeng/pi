@@ -1,4 +1,4 @@
-import { type Component, Loader, type TUI } from "@earendil-works/pi-tui";
+import { type Component, Loader, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import type { WorkingIndicatorOptions } from "../../../core/extensions/index.ts";
 import { theme } from "../theme/theme.ts";
@@ -27,9 +27,11 @@ export const DEFAULT_WORKING_MESSAGES = [
 
 const DEFAULT_WORKING_FRAMES = ["✦", "✧", "⋆", "·", "⋆", "✧"] as const;
 
-function createDefaultWorkingIndicator(): WorkingIndicatorOptions {
+function createDefaultWorkingIndicator(
+	colorFn: (text: string) => string = (text) => theme.fg("accent", text),
+): WorkingIndicatorOptions {
 	return {
-		frames: DEFAULT_WORKING_FRAMES.map((frame) => theme.fg("accent", frame)),
+		frames: DEFAULT_WORKING_FRAMES.map(colorFn),
 		intervalMs: 140,
 	};
 }
@@ -93,6 +95,15 @@ export class StatusIndicator extends Loader {
 		this.kind = kind;
 	}
 
+	renderInBorder(width: number): string {
+		const line = super.render(width + 2)[1] ?? "";
+		return truncateToWidth(line.startsWith(" ") ? line.slice(1).trimEnd() : line.trimEnd(), width, "");
+	}
+
+	renderSpinnerInBorder(width: number): string {
+		return truncateToWidth(this.getRenderedIndicator(), width, "");
+	}
+
 	dispose(): void {
 		this.stop();
 	}
@@ -100,6 +111,7 @@ export class StatusIndicator extends Loader {
 
 export class WorkingStatusIndicator extends StatusIndicator {
 	private baseMessage: string;
+	private workingColorFn: ((text: string) => string) | undefined;
 	private startedAt: number | undefined;
 	private outputTokens = 0;
 	private elapsedInterval: NodeJS.Timeout | undefined;
@@ -110,17 +122,20 @@ export class WorkingStatusIndicator extends StatusIndicator {
 		ui: TUI,
 		message: string,
 		indicator?: WorkingIndicatorOptions,
+		colorFn?: (text: string) => string,
 		progress?: { startedAt: number; outputTokens: number },
 	) {
 		super(
 			"working",
 			ui,
-			(spinner) => theme.fg("accent", spinner),
-			(text) => theme.fg("muted", text),
+			colorFn ?? ((text) => theme.fg("accent", text)),
+			colorFn ?? ((text) => theme.fg("muted", text)),
 			message,
-			indicator ?? createDefaultWorkingIndicator(),
+			indicator ?? createDefaultWorkingIndicator(colorFn),
 		);
 		this.baseMessage = message;
+		this.workingColorFn = colorFn;
+		if (!indicator) this.setIndicator();
 		this.textSweepInterval = setInterval(() => {
 			if (this.baseMessage.length > 0) {
 				this.textAnimationFrame++;
@@ -138,10 +153,11 @@ export class WorkingStatusIndicator extends StatusIndicator {
 	}
 
 	override setIndicator(indicator?: WorkingIndicatorOptions): void {
-		super.setIndicator(indicator ?? createDefaultWorkingIndicator());
+		super.setIndicator(indicator ?? createDefaultWorkingIndicator(this.workingColorFn));
 	}
 
 	override renderMessage(message: string): string {
+		if (this.workingColorFn) return this.workingColorFn(message);
 		if (!this.baseMessage) {
 			return theme.fg("accent", message);
 		}

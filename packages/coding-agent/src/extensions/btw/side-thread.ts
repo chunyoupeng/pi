@@ -8,11 +8,11 @@
 import {
 	type Api,
 	type AssistantMessage,
-	type Context,
 	clampThinkingLevel,
 	type Message,
 	type Model,
 	type ModelThinkingLevel,
+	normalizeContext,
 	type Provider,
 	type SimpleStreamOptions,
 	type UserMessage,
@@ -183,10 +183,10 @@ export async function runSideQuestionStream({
 
 	const effectiveModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
 	const messages = buildSideThreadMessages(thread, question, effectiveModel);
-	const context: Context = {
+	const context = normalizeContext({
 		systemPrompt: SIDE_SYSTEM_PROMPT,
 		messages,
-	};
+	});
 
 	const streamOptions: SimpleStreamOptions = {
 		apiKey: auth.apiKey,

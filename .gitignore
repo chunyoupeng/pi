@@ -41,7 +41,9 @@ pi-*.html
 out.html
 packages/coding-agent/binaries/
 todo.md
+!packages/coding-agent/docs/todo.md
 plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+packages/agent/docs/extensions/pi-server-artifact/index.md

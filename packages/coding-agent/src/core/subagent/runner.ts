@@ -124,7 +124,7 @@ async function executeSubagent(
 
 	const tools = subAgent.state.tools;
 	const thinkingLevel = subAgent.state.thinkingLevel;
-	const shouldStopAfterTurn = subAgent.shouldStopAfterTurn;
+	const finishTurn = subAgent.finishTurn;
 	const messageStart = subAgent.state.messages.length;
 	const steps: SubagentExecutionStep[] = [];
 	const previousUsage = existingSession?.totalUsage ?? EMPTY_USAGE;
@@ -232,7 +232,7 @@ async function executeSubagent(
 			summaryStart = subAgent.state.messages.length;
 			subAgent.state.tools = [];
 			subAgent.state.thinkingLevel = "off";
-			subAgent.shouldStopAfterTurn = () => true;
+			subAgent.finishTurn = () => ({ action: "end" });
 			await raceWithAbortSignal(
 				subAgent.prompt(
 					"You have timed out. Stop work immediately. Do not call tools or investigate further. " +
@@ -263,7 +263,7 @@ async function executeSubagent(
 		unsubscribe();
 		subAgent.state.tools = tools;
 		subAgent.state.thinkingLevel = thinkingLevel;
-		subAgent.shouldStopAfterTurn = shouldStopAfterTurn;
+		subAgent.finishTurn = finishTurn;
 		if (timedOut && subAgent.state.isStreaming && subAgent.state.pendingToolCalls.size === 0) {
 			// A hung provider must not hold up resumption or mutate the saved transcript later.
 			// An unsettled tool instead stays busy: its workspace side effects may still be running.

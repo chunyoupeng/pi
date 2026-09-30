@@ -12,7 +12,7 @@ export {
 	type ContextItemDetail,
 	ContextPanelComponent,
 } from "./context-panel.ts";
-export { CustomEditor } from "./custom-editor.ts";
+export { CustomEditor, type CustomEditorOptions } from "./custom-editor.ts";
 export { CustomMessageComponent } from "./custom-message.ts";
 export { DaxnutsComponent } from "./daxnuts.ts";
 export { type RenderDiffOptions, renderDiff } from "./diff.ts";
