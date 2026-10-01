@@ -232,7 +232,7 @@ export class FooterComponent implements Component {
 			contextPercentValue > 90 ? "error" : contextPercentValue > 70 ? "warning" : "syntaxType";
 		let contextBlock = "";
 		if (contextWindow > 0) {
-			const totalBlocks = 6;
+			const totalBlocks = 10;
 			const filled =
 				contextPercentValue > 0
 					? Math.max(1, Math.min(totalBlocks, Math.round((contextPercentValue / 100) * totalBlocks)))

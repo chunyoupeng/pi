@@ -14,7 +14,7 @@
 ### Changed
 
 - Updated user historical message appearance to prefix with a theme accent-colored ❯ and align continuation lines without a full background block.
-- Collapsed the footer to a single line when it fits, with cwd and token traffic on the left and model, context gauge and cost on the right; the context block is now `▰▱▱▱▱▱ 12.3% · 200k` with `no-auto` shown only when auto compaction is off.
+- Collapsed the footer to a single line when it fits, with cwd and token traffic on the left and model, context gauge and cost on the right; the context block is now `▰▱▱▱▱▱▱▱▱▱ 12.3% · 200k` with `no-auto` shown only when auto compaction is off.
 
 ### Fixed
 

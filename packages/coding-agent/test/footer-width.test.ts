@@ -296,7 +296,7 @@ describe("FooterComponent layout", () => {
 		const lines = footer.render(120).map(stripAnsi);
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toMatch(
-			/^\/tmp\/project \(main\) {2}· {2}↑ 6\.2k {2}↓ 86 +test \/ test-model · high {2}· {2}▰▱▱▱▱▱ 12\.3% · 200k {2}· {2}\$0\.001$/,
+			/^\/tmp\/project \(main\) {2}· {2}↑ 6\.2k {2}↓ 86 +test \/ test-model · high {2}· {2}▰▱▱▱▱▱▱▱▱▱ 12\.3% · 200k {2}· {2}\$0\.001$/,
 		);
 	});
 
@@ -307,7 +307,7 @@ describe("FooterComponent layout", () => {
 		const lines = footer.render(70).map(stripAnsi);
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toMatch(/^\/tmp\/project \(main\) +test \/ test-model · high$/);
-		expect(lines[1]).toMatch(/^↑ 6\.2k {2}↓ 86 +▰▱▱▱▱▱ 12\.3% · 200k {2}· {2}\$0\.001$/);
+		expect(lines[1]).toMatch(/^↑ 6\.2k {2}↓ 86 +▰▱▱▱▱▱▱▱▱▱ 12\.3% · 200k {2}· {2}\$0\.001$/);
 	});
 
 	it("shows no-auto only when auto compaction is disabled", () => {
