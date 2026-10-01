@@ -5,7 +5,7 @@ import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ContextUsage } from "../../../core/extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
-import { theme } from "../theme/theme.ts";
+import { type ThemeColor, theme } from "../theme/theme.ts";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -166,83 +166,54 @@ export class FooterComponent implements Component {
 		const { usageTotals, latestCacheHitRate, contextUsage } = this.getSessionStats();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+		const contextPercentKnown = contextUsage?.percent !== null;
+		const sep = theme.fg("dim", "  ·  ");
 
-		// Replace home directory with ~
+		// Location: cwd, git branch, session name
 		const rawPwd = formatCwdForFooter(
 			this.session.sessionManager.getCwd(),
 			process.env.HOME || process.env.USERPROFILE,
 		);
-		let leftSide = theme.fg("muted", rawPwd);
-
-		// Add git branch if available
+		let location = theme.fg("muted", rawPwd);
 		const branch = this.footerData.getGitBranch();
 		if (branch) {
-			leftSide += ` ${theme.fg("dim", "(")}${theme.fg("accent", branch)}${theme.fg("dim", ")")}`;
+			location += ` ${theme.fg("dim", "(")}${theme.fg("accent", branch)}${theme.fg("dim", ")")}`;
 		}
-
-		// Add session name if set
 		const sessionName = this.session.sessionManager.getSessionName();
 		if (sessionName) {
-			leftSide += ` ${theme.fg("dim", "•")} ${theme.fg("text", sessionName)}`;
+			location += ` ${theme.fg("dim", "•")} ${theme.fg("text", sessionName)}`;
 		}
 
-		// Build right side for Line 1: model name + provider + thinking level
+		// Model: provider / model · thinking → routed
 		const modelName = state.model?.id || "no-model";
-		let rightSide = theme.fg("text", modelName);
-
+		let modelBlock = theme.fg("text", modelName);
 		if (state.model?.reasoning) {
 			const thinkingLevel = state.thinkingLevel || "off";
 			const thinkingColor = theme.getThinkingBorderColor(thinkingLevel);
 			const label = thinkingLevel === "off" ? "thinking off" : thinkingLevel;
-			rightSide += ` ${theme.fg("dim", "·")} ${thinkingColor(label)}`;
+			modelBlock += ` ${theme.fg("dim", "·")} ${thinkingColor(label)}`;
 		}
-
 		if (this.footerData.getAvailableProviderCount() > 1 && state.model) {
-			rightSide = `${theme.fg("dim", `${state.model.provider} / `)}${rightSide}`;
+			modelBlock = `${theme.fg("dim", `${state.model.provider} / `)}${modelBlock}`;
 		}
-
-		// Assemble Line 1 with left and right sides
-		const minPadding = 2;
-		const leftW = visibleWidth(leftSide);
 		const routed = this.session.routedModel;
 		if (routed) {
-			rightSide += ` → ${routed.model.id}${routed.thinkingLevel ? ` · ${routed.thinkingLevel}` : ""}`;
+			modelBlock += ` → ${routed.model.id}${routed.thinkingLevel ? ` · ${routed.thinkingLevel}` : ""}`;
 		}
 
-		const rightW = visibleWidth(rightSide);
-		let line1: string;
-
-		if (leftW + minPadding + rightW <= width) {
-			const pad = " ".repeat(width - leftW - rightW);
-			line1 = leftSide + pad + rightSide;
-		} else if (width - rightW - minPadding >= 12) {
-			const availLeft = width - rightW - minPadding;
-			const truncLeft = truncateToWidth(leftSide, availLeft, theme.fg("dim", "..."));
-			const pad = " ".repeat(Math.max(1, width - visibleWidth(truncLeft) - rightW));
-			line1 = truncLeft + pad + rightSide;
-		} else if (width - leftW - minPadding >= 10) {
-			const availRight = width - leftW - minPadding;
-			const truncRight = truncateToWidth(rightSide, availRight, "");
-			const pad = " ".repeat(Math.max(1, width - leftW - visibleWidth(truncRight)));
-			line1 = leftSide + pad + truncRight;
-		} else {
-			line1 = truncateToWidth(leftSide, width, theme.fg("dim", "..."));
-		}
-
-		// Build Line 2: Telemetry / Metrics (Balanced two-tier layout)
-		// Left side: Traffic & Cache
+		// Traffic: cumulative input/output tokens. Grows during streaming, so it lives on the
+		// left where growth only consumes blank space instead of shifting the right block.
 		const trafficParts: string[] = [];
 		if (usageTotals.input) {
-			trafficParts.push(`${theme.fg("syntaxVariable", "↑")}${formatTokens(usageTotals.input)}`);
+			trafficParts.push(`${theme.fg("dim", "↑")} ${theme.fg("muted", formatTokens(usageTotals.input))}`);
 		}
 		const outputTotal = usageTotals.output + this.liveOutputTokens;
 		if (outputTotal) {
-			trafficParts.push(`${theme.fg("syntaxString", "↓")}${formatTokens(outputTotal)}`);
+			trafficParts.push(`${theme.fg("dim", "↓")} ${theme.fg("muted", formatTokens(outputTotal))}`);
 		}
-		const trafficStr = trafficParts.join("  ");
+		const trafficBlock = trafficParts.join("  ");
 
-		let cacheStr = "";
+		let cacheBlock = "";
 		if (usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) {
 			const hitRateStr = latestCacheHitRate !== undefined ? ` (${latestCacheHitRate.toFixed(1)}%)` : "";
 			let c = "";
@@ -253,49 +224,31 @@ export class FooterComponent implements Component {
 				const writeStr = `+${formatTokens(usageTotals.cacheWrite)}W`;
 				c = c ? `${c} ${theme.fg("dim", writeStr)}` : theme.fg("dim", writeStr);
 			}
-			cacheStr = c.trim();
+			cacheBlock = c.trim();
 		}
 
-		const line2LeftParts = [trafficStr, cacheStr].filter((s) => s.length > 0);
-		const line2Left = line2LeftParts.join(theme.fg("dim", "  ·  "));
-
-		// Right side: Mini progress bar + Context watermark + Cost
-		let miniBar = "";
+		// Context: gauge + percent, window size and auto-compaction state as dim trailers
+		const gaugeColor: ThemeColor =
+			contextPercentValue > 90 ? "error" : contextPercentValue > 70 ? "warning" : "syntaxType";
+		let contextBlock = "";
 		if (contextWindow > 0) {
-			const totalBlocks = 8;
-			let filled = 0;
-			if (contextPercentValue > 0) {
-				filled = Math.max(1, Math.min(totalBlocks, Math.round((contextPercentValue / 100) * totalBlocks)));
-			}
-			const empty = totalBlocks - filled;
-			const fillChar = "■";
-			const emptyChar = "□";
-			let fillColored: string;
-			if (contextPercentValue > 90) {
-				fillColored = theme.fg("error", fillChar.repeat(filled));
-			} else if (contextPercentValue > 70) {
-				fillColored = theme.fg("warning", fillChar.repeat(filled));
-			} else {
-				fillColored = theme.fg("syntaxType", fillChar.repeat(filled));
-			}
-			const emptyColored = theme.fg("borderMuted", emptyChar.repeat(empty));
-			miniBar = `${theme.fg("dim", "[")}${fillColored}${emptyColored}${theme.fg("dim", "]")}`;
+			const totalBlocks = 6;
+			const filled =
+				contextPercentValue > 0
+					? Math.max(1, Math.min(totalBlocks, Math.round((contextPercentValue / 100) * totalBlocks)))
+					: 0;
+			contextBlock = `${theme.fg(gaugeColor, "▰".repeat(filled))}${theme.fg("borderMuted", "▱".repeat(totalBlocks - filled))} `;
 		}
-
-		const autoIndicator = this.autoCompactEnabled ? " (auto)" : "";
-		const pctText = contextPercent === "?" ? "?" : `${contextPercent}%`;
-		const windowText = `of ${formatTokens(contextWindow)}${autoIndicator}`;
-		let contextText = `${pctText} ${windowText}`;
-
-		if (contextPercentValue > 90) {
-			contextText = theme.fg("error", contextText);
-		} else if (contextPercentValue > 70) {
-			contextText = theme.fg("warning", contextText);
-		} else {
-			contextText = theme.fg("text", contextText);
+		const pctText = contextPercentKnown ? `${contextPercentValue.toFixed(1)}%` : "?";
+		contextBlock += theme.fg(gaugeColor === "syntaxType" ? "text" : gaugeColor, pctText);
+		if (contextWindow > 0) {
+			contextBlock += ` ${theme.fg("dim", `· ${formatTokens(contextWindow)}`)}`;
+		}
+		if (!this.autoCompactEnabled) {
+			contextBlock += ` ${theme.fg("dim", "· no-auto")}`;
 		}
 		if (areExperimentalFeaturesEnabled()) {
-			contextText += ` ${theme.fg("dim", "·")} ${theme.bold(theme.fg("warning", "xp"))}`;
+			contextBlock += ` ${theme.fg("dim", "·")} ${theme.bold(theme.fg("warning", "xp"))}`;
 		}
 
 		let costBlock = "";
@@ -306,45 +259,29 @@ export class FooterComponent implements Component {
 			costBlock = theme.fg("text", `$${usageTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
 		}
 
-		const rightElements = [`${miniBar ? `${miniBar} ` : ""}${contextText}`, costBlock].filter((s) => s.length > 0);
-		const line2Right = rightElements.join(theme.fg("dim", "  ·  "));
+		const minPadding = 2;
+		const joinEnds = (left: string, right: string): string | undefined => {
+			const leftW = visibleWidth(left);
+			const rightW = visibleWidth(right);
+			if (leftW + minPadding + rightW > width) return undefined;
+			return left + " ".repeat(width - leftW - rightW) + right;
+		};
+		const nonEmpty = (parts: string[]) => parts.filter((s) => s.length > 0);
 
-		// Assemble Line 2 with two-ended alignment and responsive degradation
-		const l2LeftW = visibleWidth(line2Left);
-		const l2RightW = visibleWidth(line2Right);
-		let line2: string;
-
-		if (l2LeftW + minPadding + l2RightW <= width) {
-			const pad = " ".repeat(width - l2LeftW - l2RightW);
-			line2 = line2Left + pad + line2Right;
+		// Preferred layout: one line. Location and traffic left, model and context right.
+		const lines: string[] = [];
+		const oneLine = joinEnds(
+			nonEmpty([location, trafficBlock, cacheBlock]).join(sep),
+			nonEmpty([modelBlock, contextBlock, costBlock]).join(sep),
+		);
+		if (oneLine !== undefined) {
+			lines.push(oneLine);
 		} else {
-			// Step 1: Drop miniBar to save space
-			const rightWithoutBar = [contextText, costBlock].filter((s) => s.length > 0).join(theme.fg("dim", "  ·  "));
-			const rNoBarW = visibleWidth(rightWithoutBar);
-
-			if (l2LeftW + minPadding + rNoBarW <= width) {
-				const pad = " ".repeat(width - l2LeftW - rNoBarW);
-				line2 = line2Left + pad + rightWithoutBar;
-			} else {
-				// Step 2: Drop cache from left side
-				const leftTrafficOnly = trafficStr;
-				const lTrafficW = visibleWidth(leftTrafficOnly);
-
-				if (lTrafficW + minPadding + rNoBarW <= width) {
-					const pad = " ".repeat(width - lTrafficW - rNoBarW);
-					line2 = leftTrafficOnly + pad + rightWithoutBar;
-				} else if (rNoBarW <= width) {
-					// Step 3: Right side only, right aligned
-					const pad = " ".repeat(width - rNoBarW);
-					line2 = pad + rightWithoutBar;
-				} else {
-					// Step 4: Truncate right side
-					line2 = truncateToWidth(rightWithoutBar, width, theme.fg("dim", "..."));
-				}
-			}
+			lines.push(
+				this.renderTwoEnded(width, location, modelBlock),
+				this.renderStatsLine(width, trafficBlock, cacheBlock, contextBlock, costBlock),
+			);
 		}
-
-		const lines = [line1, line2];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
 		const extensionStatuses = this.footerData.getExtensionStatuses();
@@ -358,5 +295,48 @@ export class FooterComponent implements Component {
 		}
 
 		return lines;
+	}
+
+	/** Location left, model right; truncates whichever side has room to give. */
+	private renderTwoEnded(width: number, leftSide: string, rightSide: string): string {
+		const minPadding = 2;
+		const leftW = visibleWidth(leftSide);
+		const rightW = visibleWidth(rightSide);
+		if (leftW + minPadding + rightW <= width) {
+			return leftSide + " ".repeat(width - leftW - rightW) + rightSide;
+		}
+		if (width - rightW - minPadding >= 12) {
+			const truncLeft = truncateToWidth(leftSide, width - rightW - minPadding, theme.fg("dim", "..."));
+			return truncLeft + " ".repeat(Math.max(1, width - visibleWidth(truncLeft) - rightW)) + rightSide;
+		}
+		if (width - leftW - minPadding >= 10) {
+			const truncRight = truncateToWidth(rightSide, width - leftW - minPadding, "");
+			return leftSide + " ".repeat(Math.max(1, width - leftW - visibleWidth(truncRight))) + truncRight;
+		}
+		return truncateToWidth(leftSide, width, theme.fg("dim", "..."));
+	}
+
+	/** Traffic and cache left, context and cost right; drops cache, then traffic, then truncates. */
+	private renderStatsLine(
+		width: number,
+		trafficBlock: string,
+		cacheBlock: string,
+		contextBlock: string,
+		costBlock: string,
+	): string {
+		const minPadding = 2;
+		const sep = theme.fg("dim", "  ·  ");
+		const right = [contextBlock, costBlock].filter((s) => s.length > 0).join(sep);
+		const rightW = visibleWidth(right);
+		for (const left of [[trafficBlock, cacheBlock].filter((s) => s.length > 0).join(sep), trafficBlock]) {
+			const leftW = visibleWidth(left);
+			if (leftW + minPadding + rightW <= width) {
+				return left + " ".repeat(width - leftW - rightW) + right;
+			}
+		}
+		if (rightW <= width) {
+			return " ".repeat(width - rightW) + right;
+		}
+		return truncateToWidth(right, width, theme.fg("dim", "..."));
 	}
 }
