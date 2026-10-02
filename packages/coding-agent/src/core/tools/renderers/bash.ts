@@ -42,7 +42,7 @@ function formatShellCall(args: { command?: string; timeout?: number } | undefine
 	return formatToolCallHeader(headerName, commandDisplay, theme) + timeoutSuffix;
 }
 function rebuildBashResultRenderComponent(
-	component: BashResultRenderComponent,
+	component: Container,
 	result: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		details?: BashToolDetails;
