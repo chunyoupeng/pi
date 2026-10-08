@@ -45,10 +45,32 @@ describe("collapsible message components", () => {
 		});
 
 		expect(renderText(component)).not.toContain("compaction details");
-		clickRow(component, "[compaction]");
+		clickRow(component, "Conversation compacted");
 		expect(renderText(component)).toContain("compaction details");
-		clickRow(component, "[compaction]");
+		clickRow(component, "Conversation compacted");
 		expect(renderText(component)).not.toContain("compaction details");
+	});
+
+	test("renders a compaction summary with a status bullet gutter and token details", () => {
+		const component = new CompactionSummaryMessageComponent(
+			{
+				role: "compactionSummary",
+				summary: "first line\nsecond line",
+				tokensBefore: 1234,
+				timestamp: Date.now(),
+			},
+			undefined,
+			1,
+		);
+
+		const collapsedLines = component.render(80).map((line) => stripAnsi(line));
+		expect(collapsedLines[0]).toMatch(/^ ⏺ Conversation compacted \(1,234 → ~\d+ tokens · .* to expand\)/);
+
+		component.setExpanded(true);
+		const expandedLines = component.render(80).map((line) => stripAnsi(line));
+		expect(expandedLines[0]).toMatch(/^ ⏺ Conversation compacted \(1,234 → ~\d+ tokens\)/);
+		expect(expandedLines.some((line) => line.includes("first line"))).toBe(true);
+		expect(expandedLines.some((line) => line.includes("second line"))).toBe(true);
 	});
 
 	test("toggles a branch summary when clicked", () => {

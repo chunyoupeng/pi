@@ -251,18 +251,55 @@ export class RetryStatusIndicator extends StatusIndicator {
 export type CompactionStatusReason = "manual" | "threshold" | "overflow";
 
 export class CompactionStatusIndicator extends StatusIndicator {
+	// Rendered during super(), before constructor assignments land, hence `| undefined`.
+	private readonly label: string | undefined;
+	private readonly startedAt: number | undefined;
+
 	constructor(ui: TUI, reason: CompactionStatusReason) {
-		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
 		const label =
 			reason === "manual"
-				? `Compacting context... ${cancelHint}`
-				: `${reason === "overflow" ? "Context overflow detected, " : ""}Auto-compacting... ${cancelHint}`;
+				? "Compacting context"
+				: `${reason === "overflow" ? "Context overflow detected, " : ""}Auto-compacting`;
 		super(
 			"compaction",
 			ui,
 			(spinner) => theme.fg("accent", spinner),
 			(text) => theme.fg("muted", text),
 			label,
+			createDefaultWorkingIndicator(),
+		);
+		this.label = label;
+		this.startedAt = Date.now();
+	}
+
+	override renderMessage(message: string): string {
+		// The first render runs inside super() before the subclass fields above are set.
+		const label = this.label ?? message;
+		const elapsedSeconds = (Date.now() - (this.startedAt ?? Date.now())) / 1000;
+		return (
+			theme.fg("muted", `${label} `) +
+			this.renderBar() +
+			theme.fg("dim", ` ${formatElapsedTime(elapsedSeconds)} · ${keyText("app.interrupt")} to cancel`)
+		);
+	}
+
+	/**
+	 * Indeterminate bar: compaction is one awaited LLM call with no streamed progress,
+	 * so a filled segment sweeps back and forth instead of faking a percentage. The
+	 * position derives from wall time and animates on the spinner's render interval.
+	 */
+	private renderBar(): string {
+		const width = 12;
+		const fillWidth = 4;
+		const periodMs = 1500;
+		const phase = ((Date.now() - (this.startedAt ?? Date.now())) % periodMs) / periodMs;
+		const triangle = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+		const maxStart = width - fillWidth;
+		const start = Math.round(triangle * maxStart);
+		return (
+			theme.fg("borderMuted", "░".repeat(start)) +
+			theme.fg("accent", "█".repeat(fillWidth)) +
+			theme.fg("borderMuted", "░".repeat(maxStart - start))
 		);
 	}
 }

@@ -15,6 +15,9 @@
 ### Changed
 
 - Updated user historical message appearance to prefix with a theme accent-colored ❯ and shade the text with the `userMessageBg` theme color fitted to the message content instead of a full-width background block.
+- Updated compaction summary messages to use a white status bullet gutter with aligned continuation lines instead of a full-width background block.
+- Updated the compaction status line to show the working star indicator, an animated indeterminate progress bar, and elapsed time while compaction runs.
+- Updated collapsed compaction summary messages to show a before → after token estimate (for example `71,510 → ~1,000 tokens`) instead of only the pre-compaction count.
 - Collapsed the footer to a single line when it fits, with cwd and token traffic on the left and model, context gauge and cost on the right; the context block is now `▰▱▱▱▱▱▱▱▱▱ 12.3% · 200k` with `no-auto` shown only when auto compaction is off.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
 - Changed the `showHardwareCursor` setting to use only the terminal cursor instead of also drawing Pi's reverse-video cursor
