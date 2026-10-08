@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Moved the published theme JSON Schema to `schemas/theme.schema.json` and made theme loading reject unknown top-level properties and unknown properties under `colors` or `export`. Update existing theme `$schema` references to the new path, define reusable custom colors under `vars`, and remove unsupported metadata.
+
 ### Added
 
 - Added per-role subagent disabling with `disabled: true` in Markdown profiles.
@@ -21,6 +25,10 @@
 - Collapsed the footer to a single line when it fits, with cwd and token traffic on the left and model, context gauge and cost on the right; the context block is now `▰▱▱▱▱▱▱▱▱▱ 12.3% · 200k` with `no-auto` shown only when auto compaction is off.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
 - Changed the `showHardwareCursor` setting to use only the terminal cursor instead of also drawing Pi's reverse-video cursor
+
+### Fixed
+
+- Fixed Mistral streams being aborted mid-generation (e.g. during long thinking) after the request timeout; the timeout now applies only to waiting for response headers ([#10609](https://github.com/earendil-works/pi/issues/10609))
 
 ## [1.1.0] - 2026-10-07
 
