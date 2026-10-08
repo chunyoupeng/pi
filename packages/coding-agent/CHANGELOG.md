@@ -10,10 +10,11 @@
 - Added a persistent inline todo list with checkbox progress rendered above the editor.
 - Added a pulsing green status bullet for the tool call gutter while a tool is executing.
 - Added one horizontal rule per user turn after its tool-call rows and before the final assistant response.
+- Added a white status bullet before assistant replies, with continuation lines aligned to the reply text.
 
 ### Changed
 
-- Updated user historical message appearance to prefix with a theme accent-colored ❯ and align continuation lines without a full background block.
+- Updated user historical message appearance to prefix with a theme accent-colored ❯ and shade the text with the `userMessageBg` theme color fitted to the message content instead of a full-width background block.
 - Collapsed the footer to a single line when it fits, with cwd and token traffic on the left and model, context gauge and cost on the right; the context block is now `▰▱▱▱▱▱▱▱▱▱ 12.3% · 200k` with `no-auto` shown only when auto compaction is off.
 - `/arminsayshi` now plays a 3D version in fullscreen mode, with one cube per pixel of Armin. The 3D pi logo easter egg on header logo click is replaced by it.
 - Changed the `showHardwareCursor` setting to use only the terminal cursor instead of also drawing Pi's reverse-video cursor

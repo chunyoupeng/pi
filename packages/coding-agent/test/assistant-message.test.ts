@@ -172,12 +172,12 @@ describe("AssistantMessageComponent", () => {
 		component.setExpanded(true);
 		const lines = component.render(80).map((line) => stripAnsi(line));
 
-		expect(lines.some((line) => line.includes(" hello"))).toBe(true);
+		expect(lines.some((line) => line.startsWith(" ⏺ hello"))).toBe(true);
 		expect(lines.some((line) => line.includes(" reasoning"))).toBe(true);
 
 		component.setOutputPad(0);
 		const updatedLines = component.render(80).map((line) => stripAnsi(line));
-		expect(updatedLines.some((line) => line.startsWith("hello"))).toBe(true);
+		expect(updatedLines.some((line) => line.startsWith("⏺ hello"))).toBe(true);
 		expect(updatedLines.some((line) => line.startsWith("reasoning"))).toBe(true);
 	});
 
@@ -188,7 +188,7 @@ describe("AssistantMessageComponent", () => {
 		const component = new AssistantMessageComponent(message, false, undefined, "Thinking...", 1, [
 			(markdown, context) => {
 				calls.push("formula");
-				expect(context).toEqual({ messageType: "assistant", isStreaming: false, availableWidth: 78 });
+				expect(context).toEqual({ messageType: "assistant", isStreaming: false, availableWidth: 76 });
 				return markdown.replace("$x^2$", "x²");
 			},
 			(markdown) => {
@@ -244,10 +244,10 @@ describe("AssistantMessageComponent", () => {
 			],
 		);
 
-		expect(stripAnsi(component.render(80).join("\n"))).toContain("answer (78)");
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("answer (76)");
 		component.render(80);
-		expect(stripAnsi(component.render(60).join("\n"))).toContain("answer (58)");
-		expect(availableWidths).toEqual([78, 58]);
+		expect(stripAnsi(component.render(60).join("\n"))).toContain("answer (56)");
+		expect(availableWidths).toEqual([76, 56]);
 	});
 
 	test("continues the Markdown transformer chain when a transformer throws", () => {

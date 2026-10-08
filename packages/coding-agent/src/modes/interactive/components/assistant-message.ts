@@ -1,7 +1,17 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+	Box,
+	Container,
+	Markdown,
+	type MarkdownTheme,
+	MouseRegion,
+	rgbColor,
+	Spacer,
+	Text,
+} from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { Gutter } from "./gutter.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -231,18 +241,24 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let thinkingRunIndex = 0;
+		let hasText = false;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text") {
 				const text = displayText(content.text).trim();
 				if (!text) continue;
-				// Assistant text messages with no background - trim the text
-				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(
-					new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
-					}),
+				const firstText = !hasText;
+				hasText = true;
+				const textBox = new Box(this.outputPad, 0);
+				textBox.addChild(
+					new Gutter(
+						{ width: 2, marker: () => (firstText ? theme.style("⏺", { fg: rgbColor(255, 255, 255) }) : "") },
+						new Markdown(text, 0, 0, this.markdownTheme, undefined, {
+							transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+						}),
+					),
 				);
+				this.contentContainer.addChild(textBox);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {

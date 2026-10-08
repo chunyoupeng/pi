@@ -79,8 +79,15 @@ export class UserMessageComponent extends Container {
 		const lines: string[] = [];
 		for (let i = 0; i < childLines.length; i++) {
 			const linePrefix = i === 0 ? prefixString : continuationIndent;
-			const renderedLine = `${leftPad}${linePrefix}${childLines[i]}${rightPad}`;
-			lines.push(truncateToWidth(renderedLine, width));
+			// Markdown pads each line to the full content width; trim the padding so the
+			// background shades only the text (Claude Code style), not the whole terminal row.
+			const content = childLines[i].trimEnd();
+			if (content.length === 0) {
+				lines.push(`${leftPad}${linePrefix}${rightPad}`);
+				continue;
+			}
+			const shadedLine = theme.bg("userMessageBg", `${leftPad}${linePrefix}${content}${rightPad}`);
+			lines.push(truncateToWidth(shadedLine, width));
 		}
 
 		if (lines.length === 1) {

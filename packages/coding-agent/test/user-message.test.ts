@@ -9,7 +9,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const BG_RESET = "\x1b[49m";
 
 describe("UserMessageComponent", () => {
-	test("renders user message without full background block and with accent ❯ prefix", () => {
+	test("renders user message with a fitted background shade and accent ❯ prefix", () => {
 		initTheme("dark");
 
 		const component = new UserMessageComponent("hello");
@@ -18,10 +18,11 @@ describe("UserMessageComponent", () => {
 		// Single line - no excessive vertical padding
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toContain(theme.fg("accent", "❯"));
-		expect(lines[0]).not.toContain(BG_RESET);
-		expect(stripAnsi(lines[0])).toMatch(/^ ❯ hello/);
+		// Background hugs the text (plus one space of padding on each side), not the full row
+		expect(lines[0]).toContain(BG_RESET);
+		expect(stripAnsi(lines[0])).toBe(" ❯ hello ");
 
-		// OSC markers at start of line, off line end
+		// OSC markers at start of line, before the background, off line end
 		expect(lines[0].startsWith(OSC133_ZONE_START + OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
 	});
 
@@ -33,7 +34,7 @@ describe("UserMessageComponent", () => {
 
 		expect(lines).toHaveLength(3);
 		expect(lines[0]).toContain(theme.fg("accent", "❯"));
-		expect(lines[0]).not.toContain(BG_RESET);
+		expect(lines[0]).toContain(BG_RESET);
 		expect(stripAnsi(lines[0])).toMatch(/^ ❯ first line/);
 		expect(stripAnsi(lines[1])).toMatch(/^ {3}second line/);
 		expect(stripAnsi(lines[2])).toMatch(/^ {3}third line/);
@@ -42,6 +43,19 @@ describe("UserMessageComponent", () => {
 		expect(lines[0]).toContain(OSC133_ZONE_START);
 		expect(lines[0]).not.toContain(OSC133_ZONE_END);
 		expect(lines[2].startsWith(OSC133_ZONE_END + OSC133_ZONE_FINAL)).toBe(true);
+	});
+
+	test("leaves blank separator lines unshaded", () => {
+		initTheme("dark");
+
+		const component = new UserMessageComponent("first para\n\nsecond para");
+		const lines = component.render(40);
+
+		expect(lines).toHaveLength(3);
+		expect(lines[0]).toContain(BG_RESET);
+		expect(lines[1]).not.toContain(BG_RESET);
+		expect(stripAnsi(lines[1]).trim()).toBe("");
+		expect(lines[2]).toContain(BG_RESET);
 	});
 
 	test("aligns wrapped continuation lines with message text", () => {
