@@ -26,6 +26,7 @@ const FALLBACK_PREVIEW_LINES = 10;
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
+	outputPad?: number;
 }
 
 /** Keep one glyph for every state: text circles with different outlines do not share a terminal-cell centre. */
@@ -56,6 +57,7 @@ export class ToolExecutionComponent extends Container {
 	private expanded = false;
 	private showImages: boolean;
 	private imageWidthCells: number;
+	private outputPad: number;
 	private isPartial = true;
 	private toolDefinition?: ToolRenderers;
 	private ui: TUI;
@@ -68,6 +70,7 @@ export class ToolExecutionComponent extends Container {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
 		details?: any;
+		durationMs?: number;
 	};
 	private hideComponent = false;
 	private blinkInterval: NodeJS.Timeout | undefined;
@@ -88,6 +91,7 @@ export class ToolExecutionComponent extends Container {
 		this.toolDefinition = toolDefinition;
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
+		this.outputPad = options.outputPad ?? 1;
 		this.ui = ui;
 		this.cwd = cwd;
 
@@ -155,6 +159,8 @@ export class ToolExecutionComponent extends Container {
 			expanded: this.expanded,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
+			durationMs: this.isPartial ? undefined : this.result?.durationMs,
+			outputPad: this.outputPad,
 		};
 	}
 
@@ -240,6 +246,8 @@ export class ToolExecutionComponent extends Container {
 			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 			details?: any;
 			isError: boolean;
+			/** Execution time of a final result. */
+			durationMs?: number;
 		},
 		isPartial = false,
 	): void {
@@ -253,6 +261,11 @@ export class ToolExecutionComponent extends Container {
 
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
+		this.updateDisplay();
+	}
+
+	setOutputPad(outputPad: number): void {
+		this.outputPad = outputPad;
 		this.updateDisplay();
 	}
 
@@ -324,6 +337,7 @@ export class ToolExecutionComponent extends Container {
 			const renderContainer = selfShell ? this.selfRenderContainer : this.contentBox;
 			if (renderContainer instanceof Box) {
 				renderContainer.setBgFn(undefined);
+				renderContainer.setPaddingX(this.outputPad);
 			}
 			renderContainer.clear();
 
@@ -394,6 +408,7 @@ export class ToolExecutionComponent extends Container {
 			}
 		} else {
 			this.contentText.setCustomBgFn(undefined);
+			this.contentText.setPaddingX(this.outputPad);
 			this.contentText.setText(this.formatToolExecution());
 			hasContent = true;
 		}

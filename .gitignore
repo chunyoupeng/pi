@@ -40,6 +40,8 @@ out.jsonl
 pi-*.html
 out.html
 packages/coding-agent/binaries/
+packages/env/bin/
+packages/env/daemon/target/
 todo.md
 !packages/coding-agent/docs/todo.md
 plans/

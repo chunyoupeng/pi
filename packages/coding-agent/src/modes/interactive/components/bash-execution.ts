@@ -26,20 +26,24 @@ export class BashExecutionComponent extends Container {
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
-	private excludeFromContext: boolean;
+	/** `dim` marks `!!` commands, whose output is excluded from the model context. */
+	private readonly colorKey: "dim" | "bashMode";
+	private outputPad: number;
 
-	constructor(command: string, ui: TUI, excludeFromContext = false) {
+	constructor(command: string, ui: TUI, excludeFromContext = false, outputPad = 1) {
 		super();
 		this.command = command;
-		this.excludeFromContext = excludeFromContext;
+		this.colorKey = excludeFromContext ? "dim" : "bashMode";
+		this.outputPad = outputPad;
 
+		// Add spacer
 		this.addChild(new Spacer(1));
 		this.contentContainer = new Container();
 		this.addChild(this.contentContainer);
 
 		this.loader = new Loader(
 			ui,
-			(spinner) => theme.fg(excludeFromContext ? "dim" : "bashMode", spinner),
+			(spinner) => theme.fg(this.colorKey, spinner),
 			(text) => theme.fg("muted", text),
 			`Running... (${keyText("tui.select.cancel")} to cancel)`,
 		);
@@ -52,6 +56,11 @@ export class BashExecutionComponent extends Container {
 	 */
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
+		this.updateDisplay();
+	}
+
+	setOutputPad(outputPad: number): void {
+		this.outputPad = outputPad;
 		this.updateDisplay();
 	}
 
@@ -115,8 +124,9 @@ export class BashExecutionComponent extends Container {
 
 		this.contentContainer.clear();
 
-		const colorKey = this.excludeFromContext ? "dim" : "bashMode";
-		this.contentContainer.addChild(new Text(theme.fg(colorKey, theme.bold(`Bash(${this.command})`)), 0, 0));
+		this.contentContainer.addChild(
+			new Text(theme.fg(this.colorKey, theme.bold(`Bash(${this.command})`)), this.outputPad, 0),
+		);
 
 		const outputText = availableLines.join("\n");
 		const totalLines = availableLines.length;
@@ -134,12 +144,13 @@ export class BashExecutionComponent extends Container {
 							fromEnd: true,
 							styleLine,
 							summary: isError ? undefined : theme.fg("muted", `${totalLines} stdout`),
-							width,
+							width: Math.max(1, width - this.outputPad * 2),
 						})}`,
+					this.outputPad,
 				),
 			);
 		} else if (this.status !== "running" && !isError) {
-			this.contentContainer.addChild(new Text(`\n${theme.fg("muted", "0 stdout")}`, 0, 0));
+			this.contentContainer.addChild(new Text(`\n${theme.fg("muted", "0 stdout")}`, this.outputPad, 0));
 		}
 
 		if (this.status === "running") {
@@ -158,7 +169,7 @@ export class BashExecutionComponent extends Container {
 			}
 
 			if (statusParts.length > 0) {
-				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 0, 0));
+				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, this.outputPad, 0));
 			}
 		}
 	}

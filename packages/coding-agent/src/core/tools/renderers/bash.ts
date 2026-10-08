@@ -52,6 +52,7 @@ function rebuildBashResultRenderComponent(
 	startedAt: number | undefined,
 	endedAt: number | undefined,
 	isError: boolean,
+	durationMs: number | undefined,
 ): void {
 	component.clear();
 
@@ -71,9 +72,11 @@ function rebuildBashResultRenderComponent(
 	// const summary = isError ? undefined : theme.fg("muted", `${totalLines} stdout`);
 	const summary = "";
 	const durationNote =
-		startedAt !== undefined
-			? `${options.isPartial ? "Elapsed" : "Took"} ${formatDuration((endedAt ?? Date.now()) - startedAt)}`
-			: undefined;
+		!options.isPartial && durationMs !== undefined
+			? `Took ${formatDuration(durationMs)}`
+			: startedAt !== undefined
+				? `${options.isPartial ? "Elapsed" : "Took"} ${formatDuration((endedAt ?? Date.now()) - startedAt)}`
+				: undefined;
 	if (output) {
 		component.addChild(
 			new DynamicText(
@@ -158,6 +161,7 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 				state.startedAt,
 				state.endedAt,
 				context.isError,
+				context.durationMs,
 			);
 			component.invalidate();
 			return component;
