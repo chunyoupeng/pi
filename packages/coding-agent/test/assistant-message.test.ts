@@ -5,8 +5,7 @@ import {
 	AssistantMessageComponent,
 	stripThinkingTagBlocks,
 } from "../src/modes/interactive/components/assistant-message.ts";
-import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -178,7 +177,7 @@ describe("AssistantMessageComponent", () => {
 		component.setOutputPad(0);
 		const updatedLines = component.render(80).map((line) => stripAnsi(line));
 		expect(updatedLines.some((line) => line.startsWith("⏺ hello"))).toBe(true);
-		expect(updatedLines.some((line) => line.startsWith("reasoning"))).toBe(true);
+		expect(updatedLines.some((line) => line.startsWith("  reasoning"))).toBe(true);
 	});
 
 	test("chains Markdown transformers in registration order", () => {
@@ -301,15 +300,21 @@ describe("AssistantMessageComponent", () => {
 		]);
 	});
 
-	test("uses configured output padding for user messages", () => {
+	test("renders assistant message with white/text ⏺ bullet and aligns continuation lines", () => {
 		initTheme("dark");
 
-		const paddedComponent = new UserMessageComponent("hello", undefined, 1);
-		const paddedLines = paddedComponent.render(40).map((line) => stripAnsi(line));
-		expect(paddedLines.some((line) => line.startsWith(" ❯ hello"))).toBe(true);
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "text", text: "hello\nsecond line" }]),
+		);
+		const lines = component.render(40);
 
-		const unpaddedComponent = new UserMessageComponent("hello", undefined, 0);
-		const unpaddedLines = unpaddedComponent.render(40).map((line) => stripAnsi(line));
-		expect(unpaddedLines.some((line) => line.startsWith("❯ hello"))).toBe(true);
+		// First line after blank spacer contains ⏺ hello
+		const contentLines = lines.map((l) => stripAnsi(l)).filter((l) => l.trim().length > 0);
+		expect(contentLines).toHaveLength(2);
+		expect(contentLines[0]).toMatch(/^ ⏺ hello/);
+		expect(contentLines[1]).toMatch(/^ {3}second line/);
+
+		const rendered = lines.join("\n");
+		expect(rendered).toContain(theme.fg("text", "⏺"));
 	});
 });

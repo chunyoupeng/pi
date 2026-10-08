@@ -1,17 +1,17 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
-	Box,
 	Container,
 	Markdown,
 	type MarkdownTheme,
 	MouseRegion,
-	rgbColor,
 	Spacer,
 	Text,
+	truncateToWidth,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
+import { stripAnsi } from "../../../utils/ansi.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { Gutter } from "./gutter.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -149,13 +149,48 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
-		const lines = super.render(width);
+		const prefixSymbol = "⏺";
+		const prefixString = `${theme.fg("text", prefixSymbol)} `;
+		const prefixWidth = visibleWidth(prefixSymbol) + 1;
+		const maxPadding = Math.max(0, Math.floor((width - prefixWidth) / 2));
+		const outputPad = Math.min(this.outputPad, maxPadding);
+		const contentWidth = Math.max(1, width - outputPad * 2 - prefixWidth);
+
+		const childLines = this.contentContainer.render(contentWidth);
+		if (childLines.length === 0) {
+			return [];
+		}
+
+		const leftPad = " ".repeat(outputPad);
+		const rightPad = " ".repeat(outputPad);
+		const continuationIndent = " ".repeat(prefixWidth);
+
+		const lines: string[] = [];
+		let firstContentSeen = false;
+		for (let i = 0; i < childLines.length; i++) {
+			const raw = childLines[i];
+			if (!firstContentSeen) {
+				if (stripAnsi(raw).trim().length === 0) {
+					lines.push(truncateToWidth(`${leftPad}${raw}${rightPad}`, width));
+					continue;
+				}
+				firstContentSeen = true;
+				lines.push(truncateToWidth(`${leftPad}${prefixString}${raw}${rightPad}`, width));
+			} else {
+				lines.push(truncateToWidth(`${leftPad}${continuationIndent}${raw}${rightPad}`, width));
+			}
+		}
+
 		if (this.hasToolCalls || lines.length === 0) {
 			return lines;
 		}
 
-		lines[0] = OSC133_ZONE_START + lines[0];
-		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		if (lines.length === 1) {
+			lines[0] = OSC133_ZONE_START + OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[0];
+		} else {
+			lines[0] = OSC133_ZONE_START + lines[0];
+			lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+		}
 		return lines;
 	}
 
@@ -241,24 +276,18 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let thinkingRunIndex = 0;
-		let hasText = false;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text") {
 				const text = displayText(content.text).trim();
 				if (!text) continue;
-				const firstText = !hasText;
-				hasText = true;
-				const textBox = new Box(this.outputPad, 0);
-				textBox.addChild(
-					new Gutter(
-						{ width: 2, marker: () => (firstText ? theme.style("⏺", { fg: rgbColor(255, 255, 255) }) : "") },
-						new Markdown(text, 0, 0, this.markdownTheme, undefined, {
-							transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
-						}),
-					),
+				// Assistant text messages with no background - trim the text
+				// Set paddingY=0 to avoid extra spacing before tool executions
+				this.contentContainer.addChild(
+					new Markdown(text, 0, 0, this.markdownTheme, undefined, {
+						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+					}),
 				);
-				this.contentContainer.addChild(textBox);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
@@ -293,10 +322,10 @@ export class AssistantMessageComponent extends Container {
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
 				const thinkingComponent = hidden
-					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), 0, 0)
 					: new Markdown(
 							thinkingBlocks.join("\n\n"),
-							this.outputPad,
+							0,
 							0,
 							this.markdownTheme,
 							{
@@ -332,9 +361,7 @@ export class AssistantMessageComponent extends Container {
 		this.hasToolCalls = hasToolCalls;
 		if (message.stopReason === "length") {
 			this.contentContainer.addChild(new Spacer(1));
-			this.contentContainer.addChild(
-				new Text(theme.fg("error", "Response was truncated before completion."), this.outputPad, 0),
-			);
+			this.contentContainer.addChild(new Text(theme.fg("error", "Response was truncated before completion."), 0, 0));
 		} else if (!hasToolCalls) {
 			if (message.stopReason === "aborted") {
 				const abortMessage =
@@ -342,11 +369,11 @@ export class AssistantMessageComponent extends Container {
 						? message.errorMessage
 						: "Operation aborted";
 				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
+				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), 0, 0));
 			} else if (message.stopReason === "error") {
 				const errorMsg = message.errorMessage || "Unknown error";
 				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), 0, 0));
 			}
 		}
 	}
