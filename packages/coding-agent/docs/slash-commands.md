@@ -26,7 +26,6 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/session` | Show current session information and statistics |
 | `/context` | Inspect the active context in a fullscreen panel |
 | `/goal [objective]` | Manage a [persistent goal](goal.md) |
-| `/todo` | Inspect or clear the [inline task list](todo.md) |
 | `/btw [question]` | Ask a [side question](btw.md) without changing the main conversation |
 | `/tree` | Navigate the session tree |
 | `/fork` | Create a new session from an earlier user message |
