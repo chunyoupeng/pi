@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Collapsed bash/PowerShell call headers to 2 visual lines (was 3), with `…)` marking skipped lines so the truncated form still reads as a complete call; the full command is shown when tool output is expanded (`ctrl+o`).
 - Updated user historical message appearance to prefix with a theme accent-colored ❯ and shade the text with the `userMessageBg` theme color fitted to the message content instead of a full-width background block.
 - Updated compaction summary messages to use a white status bullet gutter with aligned continuation lines instead of a full-width background block.
 - Updated the compaction status line to show the working star indicator, an animated indeterminate progress bar, and elapsed time while compaction runs.

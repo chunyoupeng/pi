@@ -264,6 +264,29 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toMatch(/^\s*bash\s*$/m);
 	});
 
+	test("bash call header collapses to 2 visual lines and expands to the full command", () => {
+		const command = `rg -n "app.tools.expand" packages/coding-agent/src --no-heading | head; rg -n "tools.expand" packages/coding-agent/src/config/keybindings* 2>/dev/null; find packages/coding-agent/src -name "*keybinding*" -o -name "*settings*" | head`;
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-bash-header-lines",
+			{ command },
+			{},
+			createBashToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		const collapsed = component.render(60);
+		// Spacer(1) + two header visual lines; the second ends with the ellipsis
+		// and keeps the closing paren of `Bash(...)`.
+		expect(collapsed.length).toBe(3);
+		expect(stripAnsi(collapsed[2]).trimEnd().endsWith("…)")).toBe(true);
+
+		component.setExpanded(true);
+		const expanded = component.render(60).map((line) => stripAnsi(line));
+		expect(expanded.length).toBeGreaterThan(2);
+		expect(expanded.join("\n")).toContain("*settings*");
+	});
+
 	test("bash execute emits an initial empty partial update before output arrives", async () => {
 		const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: unknown }> = [];
 		const operations: BashOperations = {

@@ -3,13 +3,13 @@
  * Used by tool renderers and bash-execution.ts for consistent behavior.
  */
 
-import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /** Default collapsed preview lines for Claude-style tool output. */
 export const TOOL_PREVIEW_LINES = 3;
 
 /** Default max visual lines for tool call headers like `Bash(cmd)`. */
-export const TOOL_CALL_HEADER_LINES = 3;
+export const TOOL_CALL_HEADER_LINES = 2;
 
 export interface VisualTruncateResult {
 	/** The visual lines to display */
@@ -60,22 +60,32 @@ export function truncateToVisualLines(
 
 /**
  * Truncate text to a maximum number of visual lines (from the start).
+ * `marker` replaces the cut so the reader can tell lines were skipped; pass `"…)"` for
+ * `Name(args)` headers so the truncated form still reads as a complete call.
  */
 export function truncateToVisualLinesFromStart(
 	text: string,
 	maxVisualLines: number,
 	width: number,
 	paddingX: number = 0,
+	marker: string = "…",
 ): VisualTruncateResult {
-	const allVisualLines = renderVisualLines(text, width, paddingX);
+	// Rendering pads every line out to the full width; trailing blanks would
+	// defeat the ellipsis below, so trim before measuring.
+	const allVisualLines = renderVisualLines(text, width, paddingX).map((line) => line.trimEnd());
 	if (allVisualLines.length <= maxVisualLines) {
 		return { visualLines: allVisualLines, skippedCount: 0 };
 	}
 
 	const truncatedLines = allVisualLines.slice(0, maxVisualLines);
 	if (truncatedLines.length > 0) {
+		// Reserve room for the marker so it never wraps or clips.
+		const maxWidth = Math.max(1, width - paddingX * 2);
+		const markerWidth = visibleWidth(marker);
 		const last = truncatedLines[truncatedLines.length - 1]!;
-		truncatedLines[truncatedLines.length - 1] = truncateToWidth(last, Math.max(1, width - paddingX * 2), "…");
+		const clipped =
+			visibleWidth(last) > maxWidth - markerWidth ? truncateToWidth(last, maxWidth - markerWidth, "", false) : last;
+		truncatedLines[truncatedLines.length - 1] = `${clipped}${marker}`;
 	}
 	return {
 		visualLines: truncatedLines,

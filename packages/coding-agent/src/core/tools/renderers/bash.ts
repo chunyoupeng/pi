@@ -136,6 +136,7 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 					prompt === "$" ? "Bash" : "PowerShell",
 				),
 			);
+			component.setExpanded(context.expanded);
 			return component;
 		},
 		renderResult(result, options, _theme, context) {
@@ -171,14 +172,22 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 
 class BashCallHeaderComponent {
 	private header = "";
+	private expanded = false;
 
 	setHeader(header: string): void {
 		this.header = header;
 	}
 
+	setExpanded(expanded: boolean): void {
+		this.expanded = expanded;
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		return truncateToVisualLinesFromStart(this.header, TOOL_CALL_HEADER_LINES, width).visualLines;
+		if (this.expanded) {
+			return new Text(this.header, 0, 0).render(width);
+		}
+		return truncateToVisualLinesFromStart(this.header, TOOL_CALL_HEADER_LINES, width, 0, "…)").visualLines;
 	}
 }
