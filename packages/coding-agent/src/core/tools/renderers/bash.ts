@@ -17,23 +17,12 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { BashToolDetails } from "../bash.ts";
-import { getTextOutput, invalidArgText, str } from "../render-utils.ts";
+import { getTextOutput, invalidArgText, startToolTimer, str, toolTimerText } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 const BASH_PREVIEW_LINES = TOOL_PREVIEW_LINES;
 export const BASH_UPDATE_THROTTLE_MS = 100;
 class BashResultRenderComponent extends Container {}
-function formatDuration(ms: number): string {
-	const seconds = ms / 1000;
-	if (seconds < 60) return `${seconds.toFixed(1)}s`;
-
-	const totalSeconds = Math.floor(seconds);
-	const minutes = Math.floor(totalSeconds / 60);
-	const remainder = totalSeconds % 60;
-	if (minutes < 60) return `${minutes}m ${remainder}s`;
-
-	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
-}
 function formatShellCall(args: { command?: string; timeout?: number } | undefined, headerName: string): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
@@ -49,10 +38,8 @@ function rebuildBashResultRenderComponent(
 	},
 	options: ToolRenderResultOptions,
 	showImages: boolean,
-	startedAt: number | undefined,
-	endedAt: number | undefined,
 	isError: boolean,
-	durationMs: number | undefined,
+	timerText: string | undefined,
 ): void {
 	component.clear();
 
@@ -71,12 +58,6 @@ function rebuildBashResultRenderComponent(
 		: (line: string) => theme.fg("toolOutput", line);
 	// const summary = isError ? undefined : theme.fg("muted", `${totalLines} stdout`);
 	const summary = "";
-	const durationNote =
-		!options.isPartial && durationMs !== undefined
-			? `Took ${formatDuration(durationMs)}`
-			: startedAt !== undefined
-				? `${options.isPartial ? "Elapsed" : "Took"} ${formatDuration((endedAt ?? Date.now()) - startedAt)}`
-				: undefined;
 	if (output) {
 		component.addChild(
 			new DynamicText(
@@ -88,15 +69,15 @@ function rebuildBashResultRenderComponent(
 						hintPosition: "after",
 						summary,
 						styleLine,
-						trailingNote: durationNote,
+						trailingNote: timerText,
 						width,
 					})}`,
 			),
 		);
 	} else if (summary) {
 		component.addChild(new Text(`${summary}`, 0, 0));
-	} else if (durationNote) {
-		component.addChild(new Text(theme.fg("muted", durationNote), 0, 0));
+	} else if (timerText) {
+		component.addChild(new Text(theme.fg("muted", timerText), 0, 0));
 	}
 
 	if (truncation?.truncated || fullOutputPath) {
@@ -121,11 +102,7 @@ function rebuildBashResultRenderComponent(
 export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
 	return {
 		renderCall(args, _theme, context) {
-			const state = context.state;
-			if (context.executionStarted && state.startedAt === undefined) {
-				state.startedAt = Date.now();
-				state.endedAt = undefined;
-			}
+			startToolTimer(context);
 			const component =
 				context.lastComponent instanceof BashCallHeaderComponent
 					? context.lastComponent
@@ -140,17 +117,7 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 			return component;
 		},
 		renderResult(result, options, _theme, context) {
-			const state = context.state;
-			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
-				state.interval = setInterval(() => context.invalidate(), 1000);
-			}
-			if (!options.isPartial || context.isError) {
-				state.endedAt ??= Date.now();
-				if (state.interval) {
-					clearInterval(state.interval);
-					state.interval = undefined;
-				}
-			}
+			const timerText = toolTimerText(context, options.isPartial);
 			const component =
 				(context.lastComponent instanceof BashResultRenderComponent ? context.lastComponent : undefined) ??
 				new BashResultRenderComponent();
@@ -159,10 +126,8 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 				result as any,
 				options,
 				context.showImages,
-				state.startedAt,
-				state.endedAt,
 				context.isError,
-				context.durationMs,
+				timerText,
 			);
 			component.invalidate();
 			return component;

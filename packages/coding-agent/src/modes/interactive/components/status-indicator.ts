@@ -255,7 +255,7 @@ export class CompactionStatusIndicator extends StatusIndicator {
 	private readonly label: string | undefined;
 	private readonly startedAt: number | undefined;
 
-	constructor(ui: TUI, reason: CompactionStatusReason) {
+	constructor(ui: TUI, reason: CompactionStatusReason, colorFn?: (text: string) => string) {
 		const label =
 			reason === "manual"
 				? "Compacting context"
@@ -263,10 +263,10 @@ export class CompactionStatusIndicator extends StatusIndicator {
 		super(
 			"compaction",
 			ui,
-			(spinner) => theme.fg("accent", spinner),
-			(text) => theme.fg("muted", text),
+			colorFn ?? ((spinner) => theme.fg("accent", spinner)),
+			colorFn ?? ((text) => theme.fg("muted", text)),
 			label,
-			createDefaultWorkingIndicator(),
+			createDefaultWorkingIndicator(colorFn),
 		);
 		this.label = label;
 		this.startedAt = Date.now();
