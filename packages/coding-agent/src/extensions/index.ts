@@ -1,4 +1,5 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
+import autoSessionNameExtension from "./auto-session-name/index.ts";
 import btwExtension from "./btw/index.ts";
 import codemodeExtension from "./codemode/index.ts";
 import goalExtension from "./goal/index.ts";
@@ -8,6 +9,7 @@ import memoryExtension from "./memory/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
+	{ name: "auto-session-name", factory: autoSessionNameExtension, builtin: true },
 	{ name: "btw", factory: btwExtension, builtin: true },
 	{ name: "goal", factory: goalExtension, builtin: true },
 	{ name: "memory", factory: memoryExtension, replaceable: true, builtin: true },

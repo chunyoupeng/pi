@@ -13,6 +13,8 @@ pi --resume
 
 `--continue` opens the most recent session for the current working directory. `--resume` opens the session picker. In interactive mode, `/resume` opens the same picker and `/new` starts a new session.
 
+Unnamed sessions automatically get a short title after four completed user/reply rounds. Pi uses the current model and its configured authentication for a separate, tool-free request based on the first four rounds; tool calls do not count as rounds. Existing names are never overwritten, and clearing an automatically generated name does not trigger another title. If title generation fails, Pi can try again after a later reply.
+
 Use `/name` or `--name` to assign a recognizable session name. Run `/session` to verify the current session file, ID, message count, token usage, and cost.
 
 The session picker lets you search, rename, and delete sessions. It can also show paths, change sorting, and limit results to named sessions. See [Keybindings](keybindings.md#sessions) for its shortcuts.

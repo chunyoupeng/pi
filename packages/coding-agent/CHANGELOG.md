@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added automatic session titles after four completed user/reply rounds, using the current model without overwriting existing names.
+
 ### Fixed
 
 - Pinned internal Pi dependencies to exact release versions to prevent fresh installs from mixing incompatible packages ([#10865](https://github.com/earendil-works/pi/issues/10865))
