@@ -237,8 +237,9 @@ describe("goal extension", () => {
 		expect(restored.ui.setStatus).toHaveBeenCalledWith("goal", expect.stringContaining("Persisted goal"));
 	});
 
-	it("injects hidden goal context on before_agent_start for active goals", async () => {
+	it("injects hidden goal context on before_agent_start once per goal state change without mutating history", async () => {
 		const h = setup();
+		expect(h.handlers.has("context")).toBe(false);
 		const ctx = h.makeCtx([], { hasUI: false });
 		await runCommand(h, "Context goal", ctx);
 		const result = await h.handlers.get("before_agent_start")!({}, ctx);
@@ -246,6 +247,17 @@ describe("goal extension", () => {
 		expect(message.message.customType).toBe(GOAL_CONTEXT_CUSTOM_TYPE);
 		expect(message.message.display).toBe(false);
 		expect(message.message.content).toContain("Context goal");
+
+		// Subsequent turns with the same goal state do not duplicate hidden context.
+		expect(await h.handlers.get("before_agent_start")!({}, ctx)).toBeUndefined();
+
+		// Editing the goal bumps revision and injects updated context once.
+		await runCommand(h, "edit Updated context goal", ctx);
+		const editedResult = (await h.handlers.get("before_agent_start")!({}, ctx)) as {
+			message: { customType: string; content: string; display: boolean };
+		};
+		expect(editedResult.message.content).toContain("Updated context goal");
+		expect(await h.handlers.get("before_agent_start")!({}, ctx)).toBeUndefined();
 
 		// Completed goals don't inject context.
 		await h.tools

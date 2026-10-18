@@ -314,9 +314,21 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// Lifecycle events
 	// =========================================================================
 
+	// Track the last goal state (goalId:revision:status) already present in
+	// conversation context so we never spam duplicate hidden messages every turn
+	// and never need a `context` hook that deletes earlier messages (which would
+	// invalidate prefix KV caches and trigger ACP session reconstruction).
+	let lastInjectedGoalKey: string | undefined;
+	const goalContextKey = (state: GoalState | null): string | undefined =>
+		state && (state.status === "active" || state.status === "paused")
+			? `${state.goalId}:${state.revision}:${state.status}`
+			: undefined;
+
 	pi.on("session_start", async (_event, ctx) => {
 		useCtx(ctx);
-		manager.restore(ctx.sessionManager.getBranch());
+		const branch = ctx.sessionManager.getBranch();
+		manager.restore(branch);
+		lastInjectedGoalKey = undefined;
 		refreshStatus();
 	});
 
@@ -325,39 +337,34 @@ export default function goalExtension(pi: ExtensionAPI): void {
 	// never injected into, or continued on, the selected branch.
 	pi.on("session_tree", async (_event, ctx) => {
 		useCtx(ctx);
-		manager.restore(ctx.sessionManager.getBranch());
+		const branch = ctx.sessionManager.getBranch();
+		manager.restore(branch);
+		lastInjectedGoalKey = undefined;
 		refreshStatus();
 		// Tree navigation is only available while idle. If the selected branch
 		// contains an active goal, resume its work immediately.
 		kickIfIdle(ctx);
 	});
 
-	// Hidden goal messages are persisted by the generic custom-message path so
-	// they can trigger a turn. Keep only the newest one in provider context;
-	// otherwise every automatic continuation would duplicate the objective and
-	// consume an unbounded amount of context.
-	pi.on("context", async (event) => {
-		const hiddenTypes = new Set([GOAL_CONTEXT_CUSTOM_TYPE, GOAL_CONTINUATION_CUSTOM_TYPE]);
-		let newestHiddenIndex = -1;
-		for (let i = event.messages.length - 1; i >= 0; i--) {
-			const message = event.messages[i];
-			if (message?.role === "custom" && hiddenTypes.has(message.customType)) {
-				newestHiddenIndex = i;
-				break;
-			}
-		}
-		if (newestHiddenIndex < 0) return;
-		return {
-			messages: event.messages.filter((message, index) => {
-				return message.role !== "custom" || !hiddenTypes.has(message.customType) || index === newestHiddenIndex;
-			}),
-		};
-	});
-
-	pi.on("before_agent_start", async (_event, ctx) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		useCtx(ctx);
+		const state = manager.getState();
+		const key = goalContextKey(state);
+		if (!key) {
+			lastInjectedGoalKey = undefined;
+			return;
+		}
+		// Auto-continuation turns already carry the goal objective and ID in the
+		// trigger message itself; mark the goal state as injected and skip adding
+		// a second hidden message in the same turn.
+		if (event?.messageType === "custom" && event.message?.customType === GOAL_CONTINUATION_CUSTOM_TYPE) {
+			lastInjectedGoalKey = key;
+			return;
+		}
+		if (lastInjectedGoalKey === key) return;
 		const content = manager.buildContextContent();
 		if (!content) return;
+		lastInjectedGoalKey = key;
 		// Hidden user-role custom message: objective is user data, never part of
 		// the system prompt. display:false keeps it out of the transcript.
 		return { message: { customType: GOAL_CONTEXT_CUSTOM_TYPE, content, display: false } };
