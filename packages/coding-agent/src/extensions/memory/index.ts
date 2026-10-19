@@ -1,4 +1,4 @@
-import { StringEnum } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage, StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
 import { MemoryListComponent, renderPromptSection, renderToolCall, renderToolResult } from "./render.ts";
@@ -7,9 +7,6 @@ import type { MemoryCategory, MemoryToolDetails } from "./types.ts";
 
 const CATEGORIES: readonly MemoryCategory[] = ["fact", "decision", "convention", "gotcha"] as const;
 const ACTIONS = ["add", "update", "delete", "get", "search", "list"] as const;
-const MEMORY_HINT_CUSTOM_TYPE = "memory-hint";
-const CORRECTION_OR_RULE_PATTERN =
-	/不要|禁止|以后|记住|优先|默认|规范|约定|别用|不准|必须|统一用|改成用|不要用|别跑|文件在|never\b|always\b|prefer\b|convention\b|do not\b|don't\b|instead of\b|from now on\b/i;
 
 const MemoryParams = Type.Object({
 	action: StringEnum(ACTIONS, {
@@ -30,56 +27,36 @@ const MemoryParams = Type.Object({
 
 export default function memoryExtension(pi: ExtensionAPI): void {
 	let store: MemoryStore | null = null;
+	let frozenSection: string | null = null;
 
 	const ensureStore = async (cwd: string): Promise<MemoryStore> => {
-		if (store) return store;
 		const root = await resolveProjectRoot(cwd);
+		if (store && store.projectRoot === root) return store;
 		store = new MemoryStore(root);
 		store.init();
 		return store;
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
+		frozenSection = null;
 		await ensureStore(ctx.cwd);
 	});
 
-	// Keep only the newest hidden memory-hint message in provider context so
-	// earlier turns do not accumulate duplicate reminder messages.
-	pi.on("context", async (event) => {
-		let newestHintIndex = -1;
-		for (let i = event.messages.length - 1; i >= 0; i--) {
-			const message = event.messages[i];
-			if (message?.role === "custom" && message.customType === MEMORY_HINT_CUSTOM_TYPE) {
-				newestHintIndex = i;
-				break;
+	// Freeze <project_memory> for the lifetime of a session so mid-session memory
+	// writes never mutate the system prompt prefix or invalidate the KV cache.
+	pi.on("before_agent_start", async (event, ctx) => {
+		if (frozenSection === null) {
+			const existingTag = getCurrentSystemMessage(ctx.sessionManager.buildSessionProjection().messages)?.sections
+				?.project_memory;
+			if (typeof existingTag === "string") {
+				frozenSection = existingTag.replace(/^<project_memory>\n?/u, "").replace(/\n?<\/project_memory>$/u, "");
+			} else {
+				const currentStore = await ensureStore(ctx.cwd);
+				const entries = await currentStore.listEntries();
+				frozenSection = renderPromptSection(currentStore.projectRoot, entries);
 			}
 		}
-		if (newestHintIndex < 0) return;
-		return {
-			messages: event.messages.filter((message, index) => {
-				return (
-					message.role !== "custom" || message.customType !== MEMORY_HINT_CUSTOM_TYPE || index === newestHintIndex
-				);
-			}),
-		};
-	});
-
-	pi.on("before_agent_start", async (event, ctx) => {
-		const currentStore = await ensureStore(ctx.cwd);
-		const entries = await currentStore.listEntries();
-		const section = renderPromptSection(currentStore.projectRoot, entries);
-		event.systemPromptOptions.sections.project_memory = section;
-
-		if (event.messageType === "user" && CORRECTION_OR_RULE_PATTERN.test(event.prompt)) {
-			return {
-				message: {
-					customType: MEMORY_HINT_CUSTOM_TYPE,
-					display: false,
-					content:
-						"[System reminder: The user's message appears to state a project convention, workflow preference, architectural decision, or correction. If it is a durable rule or fact for this repository, proactively call the `memory` tool (action='add' or 'update') in this turn without waiting to be asked.]",
-				},
-			};
-		}
+		event.systemPromptOptions.sections.project_memory = frozenSection;
 	});
 
 	pi.registerTool({
