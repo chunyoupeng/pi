@@ -82,6 +82,32 @@ describe("automatic session names", () => {
 		expect(harness.faux.state.callCount).toBe(4);
 	});
 
+	it("does not name a session whose manual name was cleared", async () => {
+		const harness = await setup();
+		harness.session.setSessionName("Manual title");
+		harness.session.setSessionName("");
+		await runThreeRounds(harness);
+		harness.setResponses([fauxAssistantMessage("Reply 4")]);
+		await harness.session.prompt("Question 4");
+		expect(harness.sessionManager.getSessionName()).toBeUndefined();
+		expect(harness.faux.state.callCount).toBe(4);
+	});
+
+	it("preserves a name cleared while title generation is in progress", async () => {
+		const harness = await setup();
+		await runThreeRounds(harness);
+		harness.setResponses([
+			fauxAssistantMessage("Reply 4"),
+			() => {
+				harness.session.setSessionName("Manual title");
+				harness.session.setSessionName("");
+				return fauxAssistantMessage("Generated title");
+			},
+		]);
+		await harness.session.prompt("Question 4");
+		expect(harness.sessionManager.getSessionName()).toBeUndefined();
+	});
+
 	it("preserves a name set while title generation is in progress", async () => {
 		const harness = await setup();
 		await runThreeRounds(harness);

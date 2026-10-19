@@ -1,3 +1,8 @@
+/**
+ * Name unnamed sessions after four completed user/reply rounds.
+ * Any session_info entry, including a cleared name, disables automatic naming.
+ */
+
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
 
@@ -48,7 +53,13 @@ export default function autoSessionNameExtension(pi: ExtensionAPI): void {
 	pi.on("agent_end", async (event, ctx) => {
 		const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
 		if (!ctx.model || activeRequest || pi.getSessionName() || lastAssistant?.stopReason !== "stop") return;
-		if (ctx.sessionManager.getEntries().some((entry) => entry.type === "custom" && entry.customType === ENTRY_TYPE)) {
+		if (
+			ctx.sessionManager
+				.getEntries()
+				.some(
+					(entry) => entry.type === "session_info" || (entry.type === "custom" && entry.customType === ENTRY_TYPE),
+				)
+		) {
 			return;
 		}
 		const conversation = buildTitleContext(ctx.sessionManager.getBranch());
@@ -82,7 +93,8 @@ export default function autoSessionNameExtension(pi: ExtensionAPI): void {
 				response.stopReason !== "stop" ||
 				ctx.sessionManager.getSessionId() !== sessionId ||
 				ctx.sessionManager.getLeafId() !== leafId ||
-				pi.getSessionName()
+				pi.getSessionName() ||
+				ctx.sessionManager.getEntries().some((entry) => entry.type === "session_info")
 			) {
 				return;
 			}
@@ -90,10 +102,13 @@ export default function autoSessionNameExtension(pi: ExtensionAPI): void {
 				.filter((part) => part.type === "text")
 				.map((part) => part.text)
 				.join("")
-				.trim()
-				.split(/\r?\n/)[0]
-				.replace(/^["'`“”]+|["'`“”]+$/g, "")
+				.split(/\r?\n/)
+				.find((line) => line.trim().length > 0)
+				?.trim()
+				.replace(/^(title:\s*)/i, "")
+				.replace(/^["'`“”]+|["'`“”.。]+$/g, "")
 				.trim();
+			if (!title) return;
 			const name = Array.from(title).slice(0, MAX_TITLE_CHARS).join("");
 			if (!name) return;
 			pi.setSessionName(name);
