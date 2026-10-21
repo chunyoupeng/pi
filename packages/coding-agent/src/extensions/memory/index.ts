@@ -7,6 +7,7 @@ import type { MemoryCategory, MemoryToolDetails } from "./types.ts";
 
 const CATEGORIES: readonly MemoryCategory[] = ["fact", "decision", "convention", "gotcha"] as const;
 const ACTIONS = ["add", "update", "delete", "get", "search", "list"] as const;
+const MEMORY_UPDATE_CUSTOM_TYPE = "memory-update";
 
 const MemoryParams = Type.Object({
 	action: StringEnum(ACTIONS, {
@@ -21,39 +22,65 @@ const MemoryParams = Type.Object({
 				"Category: fact (general truth), decision (architecture/choice), convention (standards/commands), gotcha (pitfalls)",
 		}),
 	),
-	pinned: Type.Optional(Type.Boolean({ description: "Whether to always include the full body in prompt context" })),
+	pinned: Type.Optional(
+		Type.Boolean({
+			description: "Whether to include the full body in the prompt index; other entries show only their title",
+		}),
+	),
 	query: Type.Optional(Type.String({ description: "Search query string (for search action)" })),
 });
 
 export default function memoryExtension(pi: ExtensionAPI): void {
 	let store: MemoryStore | null = null;
+	const rootByCwd = new Map<string, string>();
 	let frozenSection: string | null = null;
+	let reuseTranscriptSection = false;
 
 	const ensureStore = async (cwd: string): Promise<MemoryStore> => {
-		const root = await resolveProjectRoot(cwd);
-		if (store && store.projectRoot === root) return store;
-		store = new MemoryStore(root);
-		store.init();
+		let root = rootByCwd.get(cwd);
+		if (root === undefined) {
+			root = await resolveProjectRoot(cwd);
+			rootByCwd.set(cwd, root);
+		}
+		if (!store || store.projectRoot !== root) store = new MemoryStore(root);
 		return store;
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	// The current session's <project_memory> is frozen, so tell the agent about user edits directly.
+	const notifyAgent = (change: string): void => {
+		pi.sendMessage({
+			customType: MEMORY_UPDATE_CUSTOM_TYPE,
+			display: false,
+			content: `[Project memory changed by the user: ${change}. This supersedes <project_memory> until it is refreshed.]`,
+		});
+	};
+
+	// A reload or fork continues a warm prompt cache, so it keeps the section the transcript
+	// already has. Startup and resume usually come after the cache expired, so they re-render.
+	pi.on("session_start", async (event) => {
 		frozenSection = null;
-		await ensureStore(ctx.cwd);
+		reuseTranscriptSection = event.reason === "reload" || event.reason === "fork";
 	});
 
-	// Freeze <project_memory> for the lifetime of a session so mid-session memory
-	// writes never mutate the system prompt prefix or invalidate the KV cache.
+	// Compaction already rewrites the conversation, and the tool results that recorded this
+	// session's memory writes may now be summarized away.
+	pi.on("session_compact", async () => {
+		frozenSection = null;
+		reuseTranscriptSection = false;
+	});
+
+	// Freeze <project_memory> between refresh points so mid-session memory writes never mutate
+	// the system prompt prefix or invalidate the KV cache.
 	pi.on("before_agent_start", async (event, ctx) => {
 		if (frozenSection === null) {
-			const existingTag = getCurrentSystemMessage(ctx.sessionManager.buildSessionProjection().messages)?.sections
-				?.project_memory;
+			const existingTag = reuseTranscriptSection
+				? getCurrentSystemMessage(ctx.sessionManager.buildSessionProjection().messages)?.sections?.project_memory
+				: undefined;
 			if (typeof existingTag === "string") {
 				frozenSection = existingTag.replace(/^<project_memory>\n?/u, "").replace(/\n?<\/project_memory>$/u, "");
 			} else {
 				const currentStore = await ensureStore(ctx.cwd);
-				const entries = await currentStore.listEntries();
-				frozenSection = renderPromptSection(currentStore.projectRoot, entries);
+				frozenSection = renderPromptSection(currentStore.projectRoot, await currentStore.listEntries());
 			}
 		}
 		event.systemPromptOptions.sections.project_memory = frozenSection;
@@ -220,6 +247,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				try {
 					const entry = await s.addEntry({ title, category: "fact" });
 					ctx.ui.notify(`Added memory [${entry.id}]: ${entry.title}`, "info");
+					notifyAgent(`added [${entry.id}] (${entry.category}) "${entry.title}"`);
 				} catch (err) {
 					ctx.ui.notify(`Failed to add memory: ${err instanceof Error ? err.message : String(err)}`, "error");
 				}
@@ -235,6 +263,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 				try {
 					const deleted = await s.deleteEntry(id);
 					ctx.ui.notify(`Deleted memory [${deleted.id}]: ${deleted.title}`, "info");
+					notifyAgent(`deleted [${deleted.id}] "${deleted.title}"; do not follow it`);
 				} catch (err) {
 					ctx.ui.notify(`Failed to delete memory: ${err instanceof Error ? err.message : String(err)}`, "error");
 				}
