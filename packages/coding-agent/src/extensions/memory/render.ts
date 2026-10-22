@@ -3,62 +3,47 @@ import type { KeybindingsManager } from "../../core/keybindings.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { MemoryEntry, MemoryToolDetails } from "./types.ts";
 
-function formatEntryBlock(entry: MemoryEntry): string {
-	let s = `- [${entry.id}] (${entry.category}${entry.pinned ? ", pinned" : ""}) ${entry.title}\n`;
-	if (entry.body?.trim()) {
-		const indentedBody = entry.body
+function formatIndexLine(entry: MemoryEntry): string {
+	return `- [${entry.id}] (${entry.category}${entry.pinned ? ", pinned" : ""}) ${entry.title}\n`;
+}
+
+const OMITTED_NOTE_RESERVE = 70;
+
+/**
+ * Every entry's title goes in first so the model can see what exists and update instead of
+ * duplicating; only pinned entries spend the remaining budget on their bodies.
+ */
+export function renderPromptSection(projectRoot: string, entries: MemoryEntry[], charBudget = 8000): string {
+	const header = `Project: ${projectRoot}\nMemory index (pinned entries include their body; call \`memory\` with action='get' to read any other body; proactively call \`memory\` to add/update when learning durable conventions, decisions, commands, or gotchas):\n\n`;
+	if (entries.length === 0) {
+		return `${header}No entries yet.`;
+	}
+
+	let used = header.length;
+	let indexed = 0;
+	for (const entry of entries) {
+		const line = formatIndexLine(entry);
+		if (used + line.length > charBudget - OMITTED_NOTE_RESERVE) break;
+		used += line.length;
+		indexed++;
+	}
+
+	let rendered = header;
+	for (const entry of entries.slice(0, indexed)) {
+		rendered += formatIndexLine(entry);
+		if (!entry.pinned || !entry.body?.trim()) continue;
+		const body = `${entry.body
 			.trim()
 			.split("\n")
 			.map((line) => `  ${line}`)
-			.join("\n");
-		s += `${indentedBody}\n`;
-	}
-	return s;
-}
-
-export function renderPromptSection(projectRoot: string, entries: MemoryEntry[], charBudget = 8000): string {
-	const header = `Project: ${projectRoot}\nMemory entries (proactively call the \`memory\` tool to add/update when learning durable conventions, decisions, commands, or gotchas):\n`;
-	if (entries.length === 0) {
-		return `${header}\nNo entries yet.`;
-	}
-
-	let rendered = `${header}\n`;
-	const unrendered: MemoryEntry[] = [];
-
-	// 1. Pinned entries first (full title and body)
-	for (const entry of entries.filter((e) => e.pinned)) {
-		const block = formatEntryBlock(entry);
-		if (rendered.length + block.length <= charBudget) {
-			rendered += block;
-		} else {
-			unrendered.push(entry);
+			.join("\n")}\n`;
+		if (used + body.length <= charBudget - OMITTED_NOTE_RESERVE) {
+			rendered += body;
+			used += body.length;
 		}
 	}
-
-	// 2. Recent unpinned entries (full title and body)
-	for (const entry of entries.filter((e) => !e.pinned)) {
-		const block = formatEntryBlock(entry);
-		if (rendered.length + block.length <= charBudget) {
-			rendered += block;
-		} else {
-			unrendered.push(entry);
-		}
-	}
-
-	// 3. For entries that didn't fit with full body, try title-only
-	if (unrendered.length > 0) {
-		let truncatedCount = 0;
-		for (const entry of unrendered) {
-			const line = `- [${entry.id}] (${entry.category}) ${entry.title}\n`;
-			if (rendered.length + line.length <= charBudget - 70) {
-				rendered += line;
-			} else {
-				truncatedCount++;
-			}
-		}
-		if (truncatedCount > 0) {
-			rendered += `\n... ${truncatedCount} more entries; use 'memory list' or 'memory search' to inspect.\n`;
-		}
+	if (indexed < entries.length) {
+		rendered += `\n... ${entries.length - indexed} more entries; use 'memory list' or 'memory search' to inspect.\n`;
 	}
 
 	return rendered.trim();

@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { getAgentDir as getDefaultAgentDir } from "../../config.ts";
+import { getAgentDir } from "../../config.ts";
+import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
 import type { MemoryCategory, MemoryEntry } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
@@ -93,61 +95,6 @@ export function serializeEntry(entry: MemoryEntry): string {
 	return lines.join("\n");
 }
 
-export function getAgentDir(): string {
-	const envDir = process.env.PI_AGENT_DIR;
-	if (envDir) return path.resolve(envDir);
-	return getDefaultAgentDir();
-}
-
-const fileMutationQueues = new Map<string, Promise<void>>();
-let registrationQueue = Promise.resolve();
-
-async function getMutationQueueKey(filePath: string): Promise<string> {
-	const resolvedPath = path.resolve(filePath);
-	try {
-		return await fs.promises.realpath(resolvedPath);
-	} catch (error) {
-		if (typeof error === "object" && error !== null && "code" in error) {
-			const code = (error as { code: string }).code;
-			if (code === "ENOENT" || code === "ENOTDIR") {
-				return resolvedPath;
-			}
-		}
-		throw error;
-	}
-}
-
-export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-	const registration = registrationQueue.then(async () => {
-		const key = await getMutationQueueKey(filePath);
-		const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve();
-
-		let releaseNext!: () => void;
-		const nextQueue = new Promise<void>((resolveQueue) => {
-			releaseNext = resolveQueue;
-		});
-		const chainedQueue = currentQueue.then(() => nextQueue);
-		fileMutationQueues.set(key, chainedQueue);
-
-		return { key, currentQueue, chainedQueue, releaseNext };
-	});
-	registrationQueue = registration.then(
-		() => undefined,
-		() => undefined,
-	);
-
-	const { key, currentQueue, chainedQueue, releaseNext } = await registration;
-	await currentQueue;
-	try {
-		return await fn();
-	} finally {
-		releaseNext();
-		if (fileMutationQueues.get(key) === chainedQueue) {
-			fileMutationQueues.delete(key);
-		}
-	}
-}
-
 export async function resolveProjectRoot(cwd: string): Promise<string> {
 	try {
 		const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd });
@@ -164,6 +111,39 @@ export async function resolveProjectRoot(cwd: string): Promise<string> {
 	}
 }
 
+const MEMORY_ID_PATTERN = /^m-[a-z0-9]+$/;
+
+function readStoredProjectRoot(memoryDir: string): string | undefined {
+	try {
+		const info = JSON.parse(fs.readFileSync(path.join(memoryDir, "project.json"), "utf8")) as { root?: unknown };
+		return typeof info.root === "string" ? info.root : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The readable dir name is lossy (`/a/b-c` and `/a-b/c` share one), so a dir already
+ * claimed by another root falls back to a name suffixed with a hash of this root.
+ */
+export function resolveMemoryDir(agentDir: string, projectRoot: string): string {
+	const readableDir = path.join(agentDir, "memory", computeSafeDirName(projectRoot));
+	const claimedRoot = readStoredProjectRoot(readableDir);
+	if (claimedRoot === undefined || claimedRoot === projectRoot) return readableDir;
+	return `${readableDir}${createHash("sha256").update(projectRoot).digest("hex").slice(0, 8)}`;
+}
+
+function scoreEntry(entry: MemoryEntry, terms: string[]): number {
+	const title = entry.title.toLowerCase();
+	const body = entry.body?.toLowerCase() ?? "";
+	let score = 0;
+	for (const term of terms) {
+		if (title.includes(term)) score += 2;
+		else if (body.includes(term)) score += 1;
+	}
+	return score;
+}
+
 export class MemoryStore {
 	readonly projectRoot: string;
 	readonly memoryDir: string;
@@ -172,23 +152,9 @@ export class MemoryStore {
 
 	constructor(projectRoot: string, agentDir: string = getAgentDir()) {
 		this.projectRoot = path.resolve(projectRoot);
-		const safeName = computeSafeDirName(this.projectRoot);
-		this.memoryDir = path.join(agentDir, "memory", safeName);
+		this.memoryDir = resolveMemoryDir(agentDir, this.projectRoot);
 		this.entriesDir = path.join(this.memoryDir, "entries");
 		this.trashDir = path.join(this.memoryDir, ".trash");
-	}
-
-	init(): void {
-		fs.mkdirSync(this.entriesDir, { recursive: true });
-		fs.mkdirSync(this.trashDir, { recursive: true });
-		const projectInfoPath = path.join(this.memoryDir, "project.json");
-		if (!fs.existsSync(projectInfoPath)) {
-			fs.writeFileSync(
-				projectInfoPath,
-				JSON.stringify({ root: this.projectRoot, created: new Date().toISOString() }, null, 2),
-				"utf8",
-			);
-		}
 	}
 
 	async listEntries(): Promise<MemoryEntry[]> {
@@ -197,16 +163,8 @@ export class MemoryStore {
 		const entries: MemoryEntry[] = [];
 		for (const file of files) {
 			if (!file.endsWith(".md")) continue;
-			const filePath = path.join(this.entriesDir, file);
-			try {
-				const content = await fs.promises.readFile(filePath, "utf8");
-				const entry = parseEntryFile(content);
-				if (entry) {
-					entries.push(entry);
-				}
-			} catch {
-				// Ignore unreadable files
-			}
+			const entry = await this.readEntry(path.join(this.entriesDir, file));
+			if (entry) entries.push(entry);
 		}
 
 		entries.sort((a, b) => {
@@ -217,14 +175,7 @@ export class MemoryStore {
 	}
 
 	async getEntry(id: string): Promise<MemoryEntry | null> {
-		const filePath = path.join(this.entriesDir, `${id}.md`);
-		if (!fs.existsSync(filePath)) return null;
-		try {
-			const content = await fs.promises.readFile(filePath, "utf8");
-			return parseEntryFile(content);
-		} catch {
-			return null;
-		}
+		return this.readEntry(this.entryPath(id));
 	}
 
 	async addEntry(params: {
@@ -240,9 +191,8 @@ export class MemoryStore {
 		if (params.body) assertNoSecrets(params.body);
 
 		const now = new Date().toISOString();
-		const id = generateMemoryId();
 		const entry: MemoryEntry = {
-			id,
+			id: generateMemoryId(),
 			title: params.title.trim(),
 			body: params.body?.trim() || undefined,
 			category: params.category || "fact",
@@ -251,9 +201,11 @@ export class MemoryStore {
 			updated: now,
 		};
 
-		const filePath = path.join(this.entriesDir, `${id}.md`);
-		const serialized = serializeEntry(entry);
-		await this.atomicWrite(filePath, serialized);
+		const filePath = this.entryPath(entry.id);
+		await withFileMutationQueue(filePath, async () => {
+			await this.ensureDirs();
+			await this.atomicWrite(filePath, serializeEntry(entry));
+		});
 		return entry;
 	}
 
@@ -266,65 +218,88 @@ export class MemoryStore {
 			pinned?: boolean;
 		},
 	): Promise<MemoryEntry> {
-		const filePath = path.join(this.entriesDir, `${id}.md`);
-		if (!fs.existsSync(filePath)) {
-			throw new Error(`Memory entry with id '${id}' not found`);
-		}
+		const filePath = this.entryPath(id);
 		if (params.title) assertNoSecrets(params.title);
 		if (params.body) assertNoSecrets(params.body);
 
-		const current = await this.getEntry(id);
-		if (!current) {
-			throw new Error(`Memory entry with id '${id}' could not be parsed`);
-		}
-
-		const updated: MemoryEntry = {
-			...current,
-			title: params.title !== undefined ? params.title.trim() : current.title,
-			body: params.body !== undefined ? params.body.trim() || undefined : current.body,
-			category: params.category ?? current.category,
-			pinned: params.pinned ?? current.pinned,
-			updated: new Date().toISOString(),
-		};
-
-		const serialized = serializeEntry(updated);
-		await this.atomicWrite(filePath, serialized);
-		return updated;
+		// Read inside the queue so parallel updates of one entry each see the previous write.
+		return withFileMutationQueue(filePath, async () => {
+			const current = await this.readExistingEntry(id, filePath);
+			const updated: MemoryEntry = {
+				...current,
+				title: params.title !== undefined ? params.title.trim() : current.title,
+				body: params.body !== undefined ? params.body.trim() || undefined : current.body,
+				category: params.category ?? current.category,
+				pinned: params.pinned ?? current.pinned,
+				updated: new Date().toISOString(),
+			};
+			await this.atomicWrite(filePath, serializeEntry(updated));
+			return updated;
+		});
 	}
 
 	async deleteEntry(id: string): Promise<MemoryEntry> {
-		const filePath = path.join(this.entriesDir, `${id}.md`);
-		if (!fs.existsSync(filePath)) {
-			throw new Error(`Memory entry with id '${id}' not found`);
-		}
-		const current = await this.getEntry(id);
-		if (!current) {
-			throw new Error(`Memory entry with id '${id}' could not be parsed`);
-		}
-
-		const trashPath = path.join(this.trashDir, `${id}.${Date.now()}.md`);
-		await withFileMutationQueue(filePath, async () => {
-			await fs.promises.rename(filePath, trashPath);
+		const filePath = this.entryPath(id);
+		return withFileMutationQueue(filePath, async () => {
+			const current = await this.readExistingEntry(id, filePath);
+			await fs.promises.mkdir(this.trashDir, { recursive: true });
+			await fs.promises.rename(filePath, path.join(this.trashDir, `${id}.${Date.now()}.md`));
+			return current;
 		});
-		return current;
 	}
 
 	async searchEntries(query: string): Promise<MemoryEntry[]> {
-		const lowerQuery = query.toLowerCase().trim();
-		if (!lowerQuery) return [];
-		const all = await this.listEntries();
-		return all.filter((entry) => {
-			const inTitle = entry.title.toLowerCase().includes(lowerQuery);
-			const inBody = entry.body ? entry.body.toLowerCase().includes(lowerQuery) : false;
-			return inTitle || inBody;
-		});
+		const terms = query.toLowerCase().split(/\s+/u).filter(Boolean);
+		if (terms.length === 0) return [];
+		const scored = (await this.listEntries())
+			.map((entry) => ({ entry, score: scoreEntry(entry, terms) }))
+			.filter(({ score }) => score > 0);
+		scored.sort((a, b) => b.score - a.score);
+		return scored.map(({ entry }) => entry);
+	}
+
+	private entryPath(id: string): string {
+		if (!MEMORY_ID_PATTERN.test(id)) {
+			throw new Error(`Invalid memory id '${id}'`);
+		}
+		return path.join(this.entriesDir, `${id}.md`);
+	}
+
+	private async readEntry(filePath: string): Promise<MemoryEntry | null> {
+		try {
+			return parseEntryFile(await fs.promises.readFile(filePath, "utf8"));
+		} catch {
+			return null;
+		}
+	}
+
+	private async readExistingEntry(id: string, filePath: string): Promise<MemoryEntry> {
+		if (!fs.existsSync(filePath)) {
+			throw new Error(`Memory entry with id '${id}' not found`);
+		}
+		const entry = await this.readEntry(filePath);
+		if (!entry) {
+			throw new Error(`Memory entry with id '${id}' could not be parsed`);
+		}
+		return entry;
+	}
+
+	// Directories are created on first write so merely starting pi in a directory leaves nothing behind.
+	private async ensureDirs(): Promise<void> {
+		await fs.promises.mkdir(this.entriesDir, { recursive: true });
+		const projectInfoPath = path.join(this.memoryDir, "project.json");
+		if (!fs.existsSync(projectInfoPath)) {
+			await fs.promises.writeFile(
+				projectInfoPath,
+				JSON.stringify({ root: this.projectRoot, created: new Date().toISOString() }, null, 2),
+				"utf8",
+			);
+		}
 	}
 
 	private async atomicWrite(filePath: string, content: string): Promise<void> {
-		await withFileMutationQueue(filePath, async () => {
-			const tmp = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
-			await fs.promises.writeFile(tmp, content, "utf8");
-			await fs.promises.rename(tmp, filePath);
-		});
+		const tmp = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+		await fs.promises.writeFile(tmp, content, "utf8");
+		await fs.promises.rename(tmp, filePath);
 	}
 }
