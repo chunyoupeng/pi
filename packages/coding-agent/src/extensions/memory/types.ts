@@ -12,10 +12,17 @@ export interface MemoryEntry {
 	updated: string;
 }
 
+export interface MemoryLinks {
+	linked: MemoryEntry[];
+	missing: string[];
+	linkedFrom: MemoryEntry[];
+}
+
 export interface MemoryToolDetails {
 	action: MemoryAction;
 	entry?: MemoryEntry;
 	entries?: MemoryEntry[];
+	links?: MemoryLinks;
 	deletedId?: string;
 	error?: string;
 }

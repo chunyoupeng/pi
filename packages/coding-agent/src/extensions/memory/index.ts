@@ -2,8 +2,8 @@ import { getCurrentSystemMessage, StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
 import { MemoryListComponent, renderPromptSection, renderToolCall, renderToolResult } from "./render.ts";
-import { MemoryStore, resolveProjectRoot } from "./store.ts";
-import type { MemoryCategory, MemoryToolDetails } from "./types.ts";
+import { MemoryStore, parseLinks, resolveProjectRoot } from "./store.ts";
+import type { MemoryCategory, MemoryEntry, MemoryLinks, MemoryToolDetails } from "./types.ts";
 
 const CATEGORIES: readonly MemoryCategory[] = ["fact", "decision", "convention", "gotcha"] as const;
 const ACTIONS = ["add", "update", "delete", "get", "search", "list"] as const;
@@ -13,9 +13,16 @@ const MemoryParams = Type.Object({
 	action: StringEnum(ACTIONS, {
 		description: "Action to perform: add, update, delete, get, search, list",
 	}),
-	id: Type.Optional(Type.String({ description: "Entry ID (required for update, delete, get)" })),
+	id: Type.Optional(
+		Type.String({
+			description:
+				"Entry ID: a short lowercase kebab-case slug naming the fact, e.g. npm-check-skips-tests. Choose it on add (derived from the title if omitted); required for update, delete, get",
+		}),
+	),
 	title: Type.Optional(Type.String({ description: "One-line summary title (required for add)" })),
-	body: Type.Optional(Type.String({ description: "Detailed description, rationale, or context" })),
+	body: Type.Optional(
+		Type.String({ description: "Detailed description, rationale, or context. Link related entries as [[id]]" }),
+	),
 	category: Type.Optional(
 		StringEnum(CATEGORIES, {
 			description:
@@ -29,6 +36,27 @@ const MemoryParams = Type.Object({
 	),
 	query: Type.Optional(Type.String({ description: "Search query string (for search action)" })),
 });
+
+function formatLinkIds(entry: MemoryEntry): string {
+	const ids = parseLinks(entry.body);
+	return ids.length ? ` -> ${ids.map((id) => `[[${id}]]`).join(", ")}` : "";
+}
+
+// Linked entries come with their bodies so one `get` covers the neighborhood; linkers stay titles only.
+function formatLinks(links: MemoryLinks): string {
+	let text = "";
+	if (links.linked.length) {
+		const linked = links.linked.map((e) => `[${e.id}] (${e.category}) ${e.title}${e.body ? `\n${e.body}` : ""}`);
+		text += `\n\nLinked entries:\n\n${linked.join("\n\n")}`;
+	}
+	if (links.missing.length) {
+		text += `\n\nMissing links: ${links.missing.map((id) => `[[${id}]]`).join(", ")}`;
+	}
+	if (links.linkedFrom.length) {
+		text += `\n\nLinked from:\n${links.linkedFrom.map((e) => `- [${e.id}] (${e.category}) ${e.title}`).join("\n")}`;
+	}
+	return text;
+}
 
 export default function memoryExtension(pi: ExtensionAPI): void {
 	let store: MemoryStore | null = null;
@@ -101,6 +129,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 			"Before ending a turn where you fixed a non-obvious gotcha or received user feedback, check <project_memory> and record or update the entry.",
 			"Do not store: current task progress, things obvious from reading the code, secrets or credentials, guesses you have not verified.",
 			"Before adding, check <project_memory> for an existing entry; prefer update over a near-duplicate add. Keep title to one line and put detail in body.",
+			"Name each entry with a kebab-case id that says what it is (e.g. npm-check-skips-tests). When an entry refines, depends on, or contrasts with another, link it in body as [[other-id]]; `get` returns linked entries one hop away.",
 		],
 		parameters: MemoryParams,
 
@@ -112,6 +141,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 						throw new Error("Parameter 'title' is required for action 'add'");
 					}
 					const entry = await s.addEntry({
+						id: params.id,
 						title: params.title,
 						body: params.body,
 						category: params.category,
@@ -152,11 +182,15 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 						throw new Error("Parameter 'id' is required for action 'delete'");
 					}
 					const entry = await s.deleteEntry(params.id);
+					const { linkedFrom } = await s.findLinks(entry);
+					const dangling = linkedFrom.length
+						? `\n\nStill linked from ${linkedFrom.map((e) => `[${e.id}]`).join(", ")}; update their bodies.`
+						: "";
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Deleted project memory [${entry.id}]: "${entry.title}"`,
+								text: `Deleted project memory [${entry.id}]: "${entry.title}"${dangling}`,
 							},
 						],
 						details: { action: "delete", deletedId: params.id, entry } as MemoryToolDetails,
@@ -173,14 +207,15 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 							details: { action: "get", error: "Not found" } as MemoryToolDetails,
 						};
 					}
+					const links = await s.findLinks(entry);
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Memory [${entry.id}] (${entry.category}${entry.pinned ? ", pinned" : ""})\nTitle: ${entry.title}\nUpdated: ${entry.updated}${entry.body ? `\n\n${entry.body}` : ""}`,
+								text: `Memory [${entry.id}] (${entry.category}${entry.pinned ? ", pinned" : ""})\nTitle: ${entry.title}\nUpdated: ${entry.updated}${entry.body ? `\n\n${entry.body}` : ""}${formatLinks(links)}`,
 							},
 						],
-						details: { action: "get", entry } as MemoryToolDetails,
+						details: { action: "get", entry, links } as MemoryToolDetails,
 					};
 				}
 				case "search": {
@@ -189,7 +224,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
 					}
 					const results = await s.searchEntries(params.query);
 					const summary = results.length
-						? results.map((e) => `- [${e.id}] (${e.category}) ${e.title}`).join("\n")
+						? results.map((e) => `- [${e.id}] (${e.category}) ${e.title}${formatLinkIds(e)}`).join("\n")
 						: "No matching memory entries found.";
 					return {
 						content: [{ type: "text", text: summary }],

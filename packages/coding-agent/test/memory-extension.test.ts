@@ -10,6 +10,16 @@ import { MemoryStore, resolveMemoryDir } from "../src/extensions/memory/store.ts
 import type { MemoryEntry } from "../src/extensions/memory/types.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => Promise<unknown>;
+type ToolResult = { content: Array<{ type: string; text?: string }> };
+type MemoryTool = {
+	execute: (
+		toolCallId: string,
+		params: Record<string, unknown>,
+		signal: undefined,
+		onUpdate: undefined,
+		ctx: ExtensionContext,
+	) => Promise<ToolResult>;
+};
 
 function entry(id: string, title: string, overrides: Partial<MemoryEntry> = {}): MemoryEntry {
 	return {
@@ -99,6 +109,28 @@ describe("MemoryStore", () => {
 		await expect(store.deleteEntry("../x")).rejects.toThrow("Invalid memory id");
 	});
 
+	it("names entries by slug and rejects taken or malformed ids", async () => {
+		const store = new MemoryStore(projectDir, agentDir);
+		expect((await store.addEntry({ title: "npm run check skips tests" })).id).toBe("npm-run-check-skips-tests");
+		expect((await store.addEntry({ title: "只用中文" })).id).toMatch(/^note-[a-z0-9]+$/);
+		await expect(store.addEntry({ id: "npm-run-check-skips-tests", title: "Other" })).rejects.toThrow(
+			"already exists",
+		);
+		await expect(store.addEntry({ id: "Bad_Id", title: "Other" })).rejects.toThrow("Invalid memory id");
+	});
+
+	it("finds links one hop in both directions", async () => {
+		const store = new MemoryStore(projectDir, agentDir);
+		await store.addEntry({ id: "run-tests", title: "Run tests with ./test.sh", body: "see [[e2e-env]]" });
+		const check = await store.addEntry({ id: "check", title: "check", body: "[[run-tests]] and [[gone]]" });
+		await store.addEntry({ id: "commit", title: "Commit after check", body: "needs [[check]]" });
+
+		const links = await store.findLinks(check);
+		expect(links.linked.map((e) => e.id)).toEqual(["run-tests"]);
+		expect(links.missing).toEqual(["gone"]);
+		expect(links.linkedFrom.map((e) => e.id)).toEqual(["commit"]);
+	});
+
 	it("keeps both fields when one entry is updated in parallel", async () => {
 		const store = new MemoryStore(projectDir, agentDir);
 		const created = await store.addEntry({ title: "Old title", body: "old body" });
@@ -128,9 +160,12 @@ describe("memory extension", () => {
 		const handlers = new Map<string, Handler>();
 		const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
 		const sent: Array<{ customType: string; content: string; display: boolean }> = [];
+		let tool: MemoryTool | undefined;
 		const pi = {
 			on: (event: string, handler: Handler) => handlers.set(event, handler),
-			registerTool: () => {},
+			registerTool: (def: MemoryTool) => {
+				tool = def;
+			},
 			registerCommand: (name: string, def: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) =>
 				commands.set(name, def),
 			sendMessage: (message: { customType: string; content: string; display: boolean }) => sent.push(message),
@@ -158,7 +193,11 @@ describe("memory extension", () => {
 			return event.systemPromptOptions.sections.project_memory;
 		};
 		const emit = async (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx);
-		return { commands, sent, ctx, promptSection, emit };
+		const run = async (params: Record<string, unknown>): Promise<string> => {
+			const result = await tool?.execute("call", params, undefined, undefined, ctx);
+			return result?.content[0]?.text ?? "";
+		};
+		return { commands, sent, ctx, promptSection, emit, run };
 	}
 
 	it("re-renders from the store on resume and after compaction, but reuses the transcript on reload", async () => {
@@ -187,6 +226,22 @@ describe("memory extension", () => {
 		expect(sent.map((m) => m.display)).toEqual([false, false]);
 		expect(sent[0].content).toContain(`added [${added.id}]`);
 		expect(sent[1].content).toContain(`deleted [${added.id}]`);
+	});
+
+	it("returns linked bodies on get and reports dangling links on delete", async () => {
+		const { run } = setup();
+		await run({ action: "add", id: "run-tests", title: "Run tests with ./test.sh", body: "skips e2e" });
+		await run({ action: "add", id: "check", title: "Run npm run check", body: "then [[run-tests]]" });
+
+		const got = await run({ action: "get", id: "check" });
+		expect(got).toContain("Linked entries:\n\n[run-tests] (fact) Run tests with ./test.sh\nskips e2e");
+		expect(await run({ action: "get", id: "run-tests" })).toContain(
+			"Linked from:\n- [check] (fact) Run npm run check",
+		);
+		expect(await run({ action: "search", query: "npm" })).toContain(
+			"[check] (fact) Run npm run check -> [[run-tests]]",
+		);
+		expect(await run({ action: "delete", id: "run-tests" })).toContain("Still linked from [check]");
 	});
 
 	it("does not create a memory directory on session start", async () => {
