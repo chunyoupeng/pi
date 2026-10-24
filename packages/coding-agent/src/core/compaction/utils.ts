@@ -99,8 +99,13 @@ const TOOL_RESULT_MAX_CHARS = 2000;
  */
 function truncateForSummary(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
-	const truncatedChars = text.length - maxChars;
-	return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+	let end = maxChars;
+	if (end > 0) {
+		const lastCode = text.charCodeAt(end - 1);
+		if (lastCode >= 0xd800 && lastCode <= 0xdbff) end--;
+	}
+	const truncatedChars = text.length - end;
+	return `${text.slice(0, end)}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
 /**
