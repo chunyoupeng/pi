@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { getAgentDir } from "../../config.ts";
 import { withFileMutationQueue } from "../../core/tools/file-mutation-queue.ts";
-import type { MemoryCategory, MemoryEntry } from "./types.ts";
+import type { MemoryCategory, MemoryEntry, MemoryLinks } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,10 +26,21 @@ export function assertNoSecrets(text: string): void {
 	}
 }
 
-export function generateMemoryId(): string {
-	const timestamp = Date.now().toString(36);
-	const random = Math.random().toString(36).slice(2, 6);
-	return `m-${timestamp}${random}`;
+/** Ids are slugs like `npm-check-skips-tests` so a `[[id]]` link reads on its own. */
+export function slugifyTitle(title: string): string {
+	const slug = title
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.slice(0, 48)
+		.replace(/^-+|-+$/g, "");
+	return slug || `note-${Date.now().toString(36)}`;
+}
+
+const LINK_PATTERN = /\[\[([a-z0-9-]+)\]\]/g;
+
+export function parseLinks(body: string | undefined): string[] {
+	if (!body) return [];
+	return [...new Set(Array.from(body.matchAll(LINK_PATTERN), (match) => match[1]))];
 }
 
 export function computeSafeDirName(dirPath: string): string {
@@ -111,7 +122,8 @@ export async function resolveProjectRoot(cwd: string): Promise<string> {
 	}
 }
 
-const MEMORY_ID_PATTERN = /^m-[a-z0-9]+$/;
+const MEMORY_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MEMORY_ID_MAX_LENGTH = 64;
 
 function readStoredProjectRoot(memoryDir: string): string | undefined {
 	try {
@@ -179,6 +191,7 @@ export class MemoryStore {
 	}
 
 	async addEntry(params: {
+		id?: string;
 		title: string;
 		body?: string;
 		category?: MemoryCategory;
@@ -192,7 +205,7 @@ export class MemoryStore {
 
 		const now = new Date().toISOString();
 		const entry: MemoryEntry = {
-			id: generateMemoryId(),
+			id: params.id?.trim() || slugifyTitle(params.title),
 			title: params.title.trim(),
 			body: params.body?.trim() || undefined,
 			category: params.category || "fact",
@@ -203,6 +216,9 @@ export class MemoryStore {
 
 		const filePath = this.entryPath(entry.id);
 		await withFileMutationQueue(filePath, async () => {
+			if (fs.existsSync(filePath)) {
+				throw new Error(`Memory entry '${entry.id}' already exists; update it or choose another id`);
+			}
 			await this.ensureDirs();
 			await this.atomicWrite(filePath, serializeEntry(entry));
 		});
@@ -258,9 +274,24 @@ export class MemoryStore {
 		return scored.map(({ entry }) => entry);
 	}
 
+	/** One hop in both directions: entries this one links to, and entries that link to it. */
+	async findLinks(entry: MemoryEntry): Promise<MemoryLinks> {
+		const all = await this.listEntries();
+		const byId = new Map(all.map((e) => [e.id, e]));
+		const links: MemoryLinks = { linked: [], missing: [], linkedFrom: [] };
+		for (const id of parseLinks(entry.body)) {
+			if (id === entry.id) continue;
+			const target = byId.get(id);
+			if (target) links.linked.push(target);
+			else links.missing.push(id);
+		}
+		links.linkedFrom = all.filter((e) => e.id !== entry.id && parseLinks(e.body).includes(entry.id));
+		return links;
+	}
+
 	private entryPath(id: string): string {
-		if (!MEMORY_ID_PATTERN.test(id)) {
-			throw new Error(`Invalid memory id '${id}'`);
+		if (id.length > MEMORY_ID_MAX_LENGTH || !MEMORY_ID_PATTERN.test(id)) {
+			throw new Error(`Invalid memory id '${id}': use a lowercase kebab-case slug such as npm-check-skips-tests`);
 		}
 		return path.join(this.entriesDir, `${id}.md`);
 	}

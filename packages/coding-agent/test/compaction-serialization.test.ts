@@ -25,6 +25,27 @@ describe("serializeConversation", () => {
 		expect(result).toContain("x".repeat(2000));
 	});
 
+	it("should not split a UTF-16 surrogate pair when truncating tool results", () => {
+		const content = `${"x".repeat(1999)}🇹🇼${"y".repeat(500)}`;
+		const messages: Message[] = [
+			{
+				role: "toolResult",
+				toolCallId: "tc1",
+				toolName: "bash",
+				content: [{ type: "text", text: content }],
+				isError: false,
+				timestamp: Date.now(),
+			},
+		];
+
+		const result = serializeConversation(messages);
+
+		expect(result.isWellFormed()).toBe(true);
+		expect(result).toContain(
+			`[Tool result]: ${"x".repeat(1999)}\n\n[... ${content.length - 1999} more characters truncated]`,
+		);
+	});
+
 	it("should not truncate short tool results", () => {
 		const shortContent = "x".repeat(1500);
 		const messages: Message[] = [

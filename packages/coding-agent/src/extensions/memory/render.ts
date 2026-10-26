@@ -14,7 +14,7 @@ const OMITTED_NOTE_RESERVE = 70;
  * duplicating; only pinned entries spend the remaining budget on their bodies.
  */
 export function renderPromptSection(projectRoot: string, entries: MemoryEntry[], charBudget = 8000): string {
-	const header = `Project: ${projectRoot}\nMemory index (pinned entries include their body; call \`memory\` with action='get' to read any other body; proactively call \`memory\` to add/update when learning durable conventions, decisions, commands, or gotchas):\n\n`;
+	const header = `Project: ${projectRoot}\nMemory index (pinned entries include their body; bodies link related entries as [[id]]; call \`memory\` with action='get' to read any other body together with its linked entries; proactively call \`memory\` to add/update when learning durable conventions, decisions, commands, or gotchas):\n\n`;
 	if (entries.length === 0) {
 		return `${header}No entries yet.`;
 	}
@@ -124,6 +124,12 @@ export function renderToolResult(
 				theme.bold(entry.title);
 			if (entry.body) {
 				output += `\n${theme.fg("text", entry.body)}`;
+			}
+			for (const linked of details.links?.linked ?? []) {
+				output += `\n${theme.fg("dim", "-> ")}${theme.fg("accent", `[${linked.id}]`)} ${theme.fg("dim", linked.title)}`;
+			}
+			for (const linker of details.links?.linkedFrom ?? []) {
+				output += `\n${theme.fg("dim", "<- ")}${theme.fg("accent", `[${linker.id}]`)} ${theme.fg("dim", linker.title)}`;
 			}
 			return new Text(output, 0, 0);
 		}
