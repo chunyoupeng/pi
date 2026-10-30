@@ -328,6 +328,11 @@ export class Editor implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
+	/** The open autocomplete menu receives fullscreen viewport keys, such as PageUp/PageDown. */
+	get capturesViewportInput(): boolean {
+		return this.autocompleteState !== null;
+	}
+
 	protected tui: TUI;
 	private theme: EditorTheme;
 	private paddingX: number = 0;
@@ -869,7 +874,12 @@ export class Editor implements Component, Focusable {
 				return;
 			}
 
-			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) {
+			if (
+				kb.matches(data, "tui.select.up") ||
+				kb.matches(data, "tui.select.down") ||
+				kb.matches(data, "tui.select.pageUp") ||
+				kb.matches(data, "tui.select.pageDown")
+			) {
 				this.autocompleteList.handleInput(data);
 				return;
 			}

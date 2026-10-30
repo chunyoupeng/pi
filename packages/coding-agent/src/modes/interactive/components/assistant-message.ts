@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
+	type Component,
 	Container,
 	Markdown,
 	type MarkdownTheme,
@@ -270,15 +271,18 @@ export class AssistantMessageComponent extends Container {
 
 		const showThinking = !this.hideThinkingBlock && this.thinkingExpanded;
 		const displayText = (text: string) => stripThinkingTagBlocks(text, this.isStreaming);
-		const hasVisibleContent = message.content.some(
-			(c) =>
-				(c.type === "text" && displayText(c.text).trim()) ||
-				(showThinking && c.type === "thinking" && c.thinking.trim()),
-		);
 
-		if (hasVisibleContent) {
-			this.contentContainer.addChild(new Spacer(1));
-		}
+		// Spacers are added lazily, right before the next visible content block. This puts a blank
+		// line before the first visible block and after each visible thinking run that is followed
+		// by more visible content, while hidden thinking runs without a label contribute nothing.
+		let needsSpacer = true;
+		const addVisibleChild = (child: Component) => {
+			if (needsSpacer) {
+				this.contentContainer.addChild(new Spacer(1));
+				needsSpacer = false;
+			}
+			this.contentContainer.addChild(child);
+		};
 
 		// Render content in order
 		let thinkingRunIndex = 0;
@@ -289,7 +293,7 @@ export class AssistantMessageComponent extends Container {
 				if (!text) continue;
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				this.contentContainer.addChild(
+				addVisibleChild(
 					new Markdown(text, 0, 0, this.markdownTheme, undefined, {
 						transform: createMarkdownTransform(
 							"assistant",
@@ -324,15 +328,12 @@ export class AssistantMessageComponent extends Container {
 					continue;
 				}
 
-				const hasVisibleContentAfter = message.content
-					.slice(i + 1)
-					.some(
-						(c) =>
-							(c.type === "text" && displayText(c.text).trim()) || (c.type === "thinking" && c.thinking.trim()),
-					);
-
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				// A hidden run with an empty label renders nothing, including no spacing.
+				if (hidden && !this.hiddenThinkingLabel.trim()) {
+					continue;
+				}
 				const thinkingComponent = hidden
 					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), 0, 0)
 					: new Markdown(
@@ -354,7 +355,7 @@ export class AssistantMessageComponent extends Container {
 								),
 							},
 						);
-				this.contentContainer.addChild(
+				addVisibleChild(
 					new MouseRegion(thinkingComponent, (event) => {
 						if (event.type !== "click" || event.button !== "left") return undefined;
 						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
@@ -362,9 +363,9 @@ export class AssistantMessageComponent extends Container {
 						return { handled: true };
 					}),
 				);
-				if (hasVisibleContentAfter) {
-					this.contentContainer.addChild(new Spacer(1));
-				}
+				// Add spacing only when another visible assistant content block follows.
+				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
+				needsSpacer = true;
 			}
 		}
 
