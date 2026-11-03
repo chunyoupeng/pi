@@ -1,5 +1,6 @@
-import { getCurrentSystemMessage, StringEnum } from "@earendil-works/pi-ai";
+import { getCurrentSystemMessage } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { StringEnum } from "../../core/extensions/pi-ai-extension-view.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "../../core/extensions/types.ts";
 import { MemoryListComponent, renderPromptSection, renderToolCall, renderToolResult } from "./render.ts";
 import { MemoryStore, parseLinks, resolveProjectRoot } from "./store.ts";
