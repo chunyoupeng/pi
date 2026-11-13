@@ -84,6 +84,7 @@ export interface SettingsConfig {
 	mermaidRenderingMode: MermaidRenderingMode;
 	showCacheMissNotices: boolean;
 	collapseChangelog: boolean;
+	collapseToolOutput: boolean;
 	enableInstallTelemetry: boolean;
 	doubleEscapeAction: "fork" | "tree" | "none";
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
@@ -124,6 +125,7 @@ export interface SettingsCallbacks {
 	onMermaidRenderingModeChange: (mode: MermaidRenderingMode) => void;
 	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
+	onCollapseToolOutputChange: (collapsed: boolean) => void;
 	onEnableInstallTelemetryChange: (enabled: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
@@ -565,6 +567,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "collapse-tool-output",
+				label: "Collapse tool output",
+				description:
+					"Hide tool output previews (except edit and write) after a turn completes and when resuming a session",
+				currentValue: config.collapseToolOutput ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "quiet-startup",
 				label: "Quiet startup",
 				description: "Disable verbose printing at startup (header: keep only the startup header)",
@@ -935,6 +945,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "collapse-changelog":
 						callbacks.onCollapseChangelogChange(newValue === "true");
+						break;
+					case "collapse-tool-output":
+						callbacks.onCollapseToolOutputChange(newValue === "true");
 						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "header" ? "header" : newValue === "true");

@@ -35,6 +35,7 @@ type RenderSessionItems = (
 
 type RenderSessionContextThis = {
 	pendingTools: Map<string, ToolExecutionComponent>;
+	turnTools: Set<ToolExecutionComponent>;
 	chatContainer: Container;
 	footer: { invalidate(): void };
 	programStatus: { handleEvent(): void };
@@ -43,6 +44,7 @@ type RenderSessionContextThis = {
 		getShowImages(): boolean;
 		getImageWidthCells(): number;
 		getShowCacheMissNotices(): boolean;
+		getCollapseToolOutput(): boolean;
 	};
 	sessionManager: { getCwd(): string; getEntries(): SessionEntry[] };
 	session: { retryAttempt: number; modelRegistry: { find(provider: string, modelId: string): undefined } };
@@ -67,6 +69,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 	const chatContainer = new Container();
 	return {
 		pendingTools: new Map<string, ToolExecutionComponent>(),
+		turnTools: new Set<ToolExecutionComponent>(),
 		chatContainer,
 		footer: { invalidate: vi.fn() },
 		programStatus: { handleEvent: vi.fn() },
@@ -75,6 +78,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 			getShowImages: () => false,
 			getImageWidthCells: () => 60,
 			getShowCacheMissNotices: () => false,
+			getCollapseToolOutput: () => false,
 		},
 		sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },
 		session: { retryAttempt: 0, modelRegistry: { find: () => undefined } },

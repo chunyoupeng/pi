@@ -449,6 +449,8 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
+const NON_COLLAPSIBLE_PREVIEW_TOOLS = new Set(["edit", "write"]);
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
@@ -511,6 +513,7 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	private turnTools = new Set<ToolExecutionComponent>();
 	private addToolOutputDividerBeforeNextAssistant = false;
 
 	// Tool output expansion state
@@ -2349,6 +2352,7 @@ export class InteractiveMode {
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
+		this.turnTools.clear();
 		this.renderInitialMessages();
 	}
 
@@ -3680,6 +3684,7 @@ export class InteractiveMode {
 								component.setExpanded(this.toolOutputExpanded);
 								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
+								this.turnTools.add(component);
 							} else {
 								const component = this.pendingTools.get(content.id);
 								if (component) {
@@ -3780,6 +3785,7 @@ export class InteractiveMode {
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
+					this.turnTools.add(component);
 				}
 				component.markExecutionStarted();
 				this.ui.requestRender();
@@ -3828,6 +3834,20 @@ export class InteractiveMode {
 							`${pickCookedIcon()} ${pickCookedMessage()} ${formatElapsedTime(elapsedSeconds)} · ${tokensPerSecond.toFixed(1)} tok/s`,
 						);
 					}
+				}
+				if (!event.willRetry) {
+					if (this.settingsManager.getCollapseToolOutput()) {
+						for (const component of this.turnTools) {
+							if (NON_COLLAPSIBLE_PREVIEW_TOOLS.has(component.getToolName())) {
+								continue;
+							}
+							if (!this.toolOutputExpanded) {
+								component.setExpanded(false);
+							}
+							component.setPreviewCollapsed(true);
+						}
+					}
+					this.turnTools.clear();
 				}
 				this.agentStartedAt = undefined;
 				this.pendingTools.clear();
@@ -4206,6 +4226,8 @@ export class InteractiveMode {
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
 		this.pendingTools.clear();
+		this.turnTools.clear();
+		const collapseToolOutput = this.settingsManager.getCollapseToolOutput();
 		let addDividerBeforeAssistant = false;
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache misses are not persisted, unlike successful cache-warming usage.
@@ -4277,6 +4299,9 @@ export class InteractiveMode {
 								errorMessage = message.errorMessage || "Error";
 							}
 							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
+							if (collapseToolOutput && !NON_COLLAPSIBLE_PREVIEW_TOOLS.has(component.getToolName())) {
+								component.setPreviewCollapsed(true);
+							}
 						} else {
 							renderedPendingTools.set(content.id, component);
 						}
@@ -4292,6 +4317,9 @@ export class InteractiveMode {
 				const component = renderedPendingTools.get(message.toolCallId);
 				if (component) {
 					component.updateResult(message);
+					if (collapseToolOutput && !NON_COLLAPSIBLE_PREVIEW_TOOLS.has(component.getToolName())) {
+						component.setPreviewCollapsed(true);
+					}
 					renderedPendingTools.delete(message.toolCallId);
 				}
 			} else {
@@ -4311,6 +4339,7 @@ export class InteractiveMode {
 
 		for (const [toolCallId, component] of renderedPendingTools) {
 			this.pendingTools.set(toolCallId, component);
+			this.turnTools.add(component);
 		}
 		this.ui.requestRender();
 	}
@@ -5200,6 +5229,7 @@ export class InteractiveMode {
 					hideThinkingBlock: this.hideThinkingBlock,
 					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
+					collapseToolOutput: this.settingsManager.getCollapseToolOutput(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
@@ -5314,6 +5344,19 @@ export class InteractiveMode {
 					},
 					onCollapseChangelogChange: (collapsed) => {
 						this.settingsManager.setCollapseChangelog(collapsed);
+					},
+					onCollapseToolOutputChange: (collapsed) => {
+						this.settingsManager.setCollapseToolOutput(collapsed);
+						for (const child of this.chatContainer.children) {
+							if (
+								child instanceof ToolExecutionComponent &&
+								!this.turnTools.has(child) &&
+								!NON_COLLAPSIBLE_PREVIEW_TOOLS.has(child.getToolName())
+							) {
+								child.setPreviewCollapsed(collapsed);
+							}
+						}
+						this.ui.requestRender();
 					},
 					onEnableInstallTelemetryChange: (enabled) => {
 						this.settingsManager.setEnableInstallTelemetry(enabled);

@@ -280,6 +280,11 @@
       "description": "Show the condensed changelog after update; use /changelog for the full changelog.",
       "default": false
     },
+    "collapseToolOutput": {
+      "type": "boolean",
+      "description": "Hide non-destructive tool output previews (except edit and write) after a turn completes and when resuming a session.",
+      "default": true
+    },
     "enableInstallTelemetry": {
       "type": "boolean",
       "description": "Send an anonymous version and update ping after changelog-detected updates.",

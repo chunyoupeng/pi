@@ -29,6 +29,7 @@ export const SETTINGS_DEFAULTS = {
 	quietStartup: false,
 	defaultProjectTrust: "ask",
 	collapseChangelog: false,
+	collapseToolOutput: true,
 	enableInstallTelemetry: true,
 	enableAnalytics: false,
 	enableSkillCommands: true,

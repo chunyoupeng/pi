@@ -505,6 +505,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> extends Keybinding
 	isPartial: boolean;
 	/** Whether the result view is expanded. */
 	expanded: boolean;
+	/** Whether the tool preview is hidden after its turn finishes. */
+	previewCollapsed?: boolean;
 	/** Whether inline images are currently shown in the TUI. */
 	showImages: boolean;
 	/** Whether the current result is an error. */

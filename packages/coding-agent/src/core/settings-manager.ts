@@ -1058,6 +1058,16 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getCollapseToolOutput(): boolean {
+		return this.settings.collapseToolOutput ?? SETTINGS_DEFAULTS.collapseToolOutput;
+	}
+
+	setCollapseToolOutput(collapse: boolean): void {
+		this.globalSettings.collapseToolOutput = collapse;
+		this.markModified("collapseToolOutput");
+		this.save();
+	}
+
 	getEnableInstallTelemetry(): boolean {
 		return this.settings.enableInstallTelemetry ?? SETTINGS_DEFAULTS.enableInstallTelemetry;
 	}

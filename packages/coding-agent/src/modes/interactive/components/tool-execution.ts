@@ -55,6 +55,7 @@ export class ToolExecutionComponent extends Container {
 	private toolCallId: string;
 	private args: any;
 	private expanded = false;
+	private previewCollapsed = false;
 	private showImages: boolean;
 	private imageWidthCells: number;
 	private outputPad: number;
@@ -159,6 +160,7 @@ export class ToolExecutionComponent extends Container {
 			argsComplete: this.argsComplete,
 			isPartial: this.isPartial,
 			expanded: this.expanded,
+			previewCollapsed: this.isPreviewHidden(),
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
 			durationMs: this.isPartial ? undefined : this.result?.durationMs,
@@ -271,6 +273,20 @@ export class ToolExecutionComponent extends Container {
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 		this.updateDisplay();
+	}
+
+	getToolName(): string {
+		return this.toolName;
+	}
+
+	setPreviewCollapsed(collapsed: boolean): void {
+		if (this.previewCollapsed === collapsed) return;
+		this.previewCollapsed = collapsed;
+		this.updateDisplay();
+	}
+
+	private isPreviewHidden(): boolean {
+		return this.previewCollapsed && !this.expanded;
 	}
 
 	setOutputPad(outputPad: number): void {
@@ -388,7 +404,7 @@ export class ToolExecutionComponent extends Container {
 				}
 			}
 
-			if (this.result) {
+			if (this.result && !this.isPreviewHidden()) {
 				const resultRenderer = this.getResultRenderer();
 				if (!resultRenderer) {
 					const component = this.createResultFallback();
@@ -436,7 +452,7 @@ export class ToolExecutionComponent extends Container {
 		}
 		this.imageSpacers = [];
 
-		if (this.result) {
+		if (this.result && !this.isPreviewHidden()) {
 			const imageBlocks = this.result.content.filter((c) => c.type === "image");
 			const caps = getCapabilities();
 			for (const img of imageBlocks) {
@@ -481,6 +497,9 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private formatToolExecution(): string {
+		if (this.isPreviewHidden()) {
+			return formatToolCallWithArgs(this.toolName, this.args, theme, false);
+		}
 		let text = theme.fg("toolTitle", theme.bold(this.toolName));
 		const content = JSON.stringify(this.args, null, 2);
 		if (content) {

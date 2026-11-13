@@ -296,6 +296,13 @@ export const SettingsSchema = Type.Object(
 				default: SETTINGS_DEFAULTS.collapseChangelog,
 			}),
 		),
+		collapseToolOutput: Type.Optional(
+			Type.Boolean({
+				description:
+					"Hide non-destructive tool output previews (except edit and write) after a turn completes and when resuming a session.",
+				default: SETTINGS_DEFAULTS.collapseToolOutput,
+			}),
+		),
 		enableInstallTelemetry: Type.Optional(
 			Type.Boolean({
 				description: "Send an anonymous version and update ping after changelog-detected updates.",

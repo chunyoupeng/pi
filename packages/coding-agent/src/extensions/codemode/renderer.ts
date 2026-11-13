@@ -84,7 +84,7 @@ export const codemodeRenderers: Pick<
 			return component;
 		}
 		component.addChild(new Text(title, 0, 0));
-		if (code) {
+		if (code && !context.previewCollapsed) {
 			const state = context.state as CodemodeRenderState;
 			state.scriptHighlighter ??= new CodeHighlighter();
 			const highlighted = state.scriptHighlighter

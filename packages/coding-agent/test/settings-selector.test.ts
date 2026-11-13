@@ -185,4 +185,27 @@ describe("SettingsSelectorComponent", () => {
 
 		expect(onSelect).toHaveBeenCalledWith("theme-10");
 	});
+
+	it("cycles collapse tool output setting", () => {
+		const onCollapseToolOutputChange = vi.fn();
+		const config = {
+			collapseToolOutput: true,
+			warnings: {},
+			defaultModel: "not set",
+			availableDefaultModels: [],
+			availableThinkingLevels: [],
+			modelThinkingLevels: {},
+			availableThemes: [],
+		} as unknown as SettingsConfig;
+		const callbacks = {
+			onCollapseToolOutputChange,
+		} as unknown as SettingsCallbacks;
+		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+		list.selectItem("collapse-tool-output");
+
+		list.handleInput("\r");
+		list.handleInput("\r");
+
+		expect(onCollapseToolOutputChange.mock.calls.flat()).toEqual([false, true]);
+	});
 });
