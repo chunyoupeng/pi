@@ -1,5 +1,6 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
 import autoSessionNameExtension from "./auto-session-name/index.ts";
+import bgTaskExtension from "./bg-task/index.ts";
 import btwExtension from "./btw/index.ts";
 import codemodeExtension from "./codemode/index.ts";
 import goalExtension from "./goal/index.ts";
@@ -13,6 +14,7 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "btw", factory: btwExtension, builtin: true },
 	{ name: "goal", factory: goalExtension, builtin: true },
 	{ name: "memory", factory: memoryExtension, replaceable: true, builtin: true },
+	{ name: "bg-task", factory: bgTaskExtension, replaceable: true, builtin: true },
 	{ name: "llama.cpp", factory: llamaExtension, builtin: true },
 	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
 	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },
