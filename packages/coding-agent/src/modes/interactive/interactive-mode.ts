@@ -119,6 +119,7 @@ import { readRenderers, type ToolRenderers, withBuiltInRenderers } from "../../c
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { codemodeRenderers } from "../../extensions/codemode/renderer.ts";
 import { addMcpServerConfig, loadMcpConfig } from "../../extensions/mcp/config.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../../utils/clipboard.ts";
@@ -138,6 +139,7 @@ import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent, estimateAssistantOutputTokens } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
+import { CodemodeGroupComponent } from "./components/codemode-group.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { ContextPanelComponent } from "./components/context-panel.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
@@ -460,19 +462,35 @@ function isDefaultReadTool(toolName: string, toolDefinition: ToolRenderers | und
 	);
 }
 
-function findJoinableReadGroup(chatContainer: Container): ReadGroupComponent | undefined {
+function isDefaultCodemodeTool(toolName: string, toolDefinition: ToolRenderers | undefined): boolean {
+	return (
+		toolName === "codemode" &&
+		toolDefinition?.renderCall === codemodeRenderers.renderCall &&
+		toolDefinition?.renderResult === codemodeRenderers.renderResult
+	);
+}
+
+function findJoinableGroup<T extends ReadGroupComponent | CodemodeGroupComponent>(
+	chatContainer: Container,
+	groupType: new (...args: any[]) => T,
+): T | undefined {
 	const children = chatContainer.children;
 	for (let i = children.length - 1; i >= 0; i--) {
 		const child = children[i];
 		if (child instanceof AssistantMessageComponent && !child.hasVisibleContent()) {
 			continue;
 		}
-		if (child instanceof ReadGroupComponent && !child.isSealed()) {
+		if (child instanceof groupType && !child.isSealed()) {
 			return child;
 		}
 		return undefined;
 	}
 	return undefined;
+}
+
+function sealActiveToolGroups(chatContainer: Container): void {
+	findJoinableGroup(chatContainer, ReadGroupComponent)?.seal();
+	findJoinableGroup(chatContainer, CodemodeGroupComponent)?.seal();
 }
 
 function addToolCallToChat(
@@ -487,13 +505,22 @@ function addToolCallToChat(
 	expanded: boolean,
 ): ToolCallHandle {
 	if (isDefaultReadTool(toolName, toolDefinition)) {
-		let group = findJoinableReadGroup(chatContainer);
+		let group = findJoinableGroup(chatContainer, ReadGroupComponent);
 		if (!group) {
 			group = new ReadGroupComponent(options, ui, cwd);
 			group.setExpanded(expanded);
 			chatContainer.addChild(group);
 		}
 		return group.addCall(toolCallId, args);
+	}
+	if (isDefaultCodemodeTool(toolName, toolDefinition)) {
+		let group = findJoinableGroup(chatContainer, CodemodeGroupComponent);
+		if (!group) {
+			group = new CodemodeGroupComponent(options, ui, cwd);
+			group.setExpanded(expanded);
+			chatContainer.addChild(group);
+		}
+		return group.addCall(toolCallId, args, toolDefinition);
 	}
 	const component = new ToolExecutionComponent(toolName, toolCallId, args, options, toolDefinition, ui, cwd);
 	component.setExpanded(expanded);
@@ -3787,7 +3814,7 @@ export class InteractiveMode {
 							});
 						}
 						this.pendingTools.clear();
-						findJoinableReadGroup(this.chatContainer)?.seal();
+						sealActiveToolGroups(this.chatContainer);
 						this.maybeSuggestBugReport(this.streamingMessage);
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
@@ -3887,7 +3914,7 @@ export class InteractiveMode {
 					}
 				}
 				if (!event.willRetry) {
-					findJoinableReadGroup(this.chatContainer)?.seal();
+					sealActiveToolGroups(this.chatContainer);
 					if (this.settingsManager.getCollapseToolOutput()) {
 						for (const component of this.turnTools) {
 							if (NON_COLLAPSIBLE_PREVIEW_TOOLS.has(component.getToolName())) {
@@ -5309,7 +5336,11 @@ export class InteractiveMode {
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent || child instanceof ReadGroupComponent) {
+							if (
+								child instanceof ToolExecutionComponent ||
+								child instanceof ReadGroupComponent ||
+								child instanceof CodemodeGroupComponent
+							) {
 								child.setShowImages(enabled);
 							}
 						}
@@ -5317,7 +5348,11 @@ export class InteractiveMode {
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent || child instanceof ReadGroupComponent) {
+							if (
+								child instanceof ToolExecutionComponent ||
+								child instanceof ReadGroupComponent ||
+								child instanceof CodemodeGroupComponent
+							) {
 								child.setImageWidthCells(width);
 							}
 						}
@@ -5406,7 +5441,10 @@ export class InteractiveMode {
 								!NON_COLLAPSIBLE_PREVIEW_TOOLS.has(child.getToolName())
 							) {
 								child.setPreviewCollapsed(collapsed);
-							} else if (child instanceof ReadGroupComponent && !child.isActiveInTurn(this.turnTools)) {
+							} else if (
+								(child instanceof ReadGroupComponent || child instanceof CodemodeGroupComponent) &&
+								!child.isActiveInTurn(this.turnTools)
+							) {
 								child.setPreviewCollapsed(collapsed);
 							}
 						}
