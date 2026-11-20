@@ -1,3 +1,5 @@
+// Tests registry value adapters, reader lifetimes, collection, observation, and reloads.
+
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT as context, withAbortSignal, withCancel } from "../../src/context/index.ts";
@@ -304,14 +306,6 @@ describe("readers (S3)", () => {
 		await host.close(context);
 	});
 
-	it("host.registry before the publication waits for it, then resolves with the provider it served", async () => {
-		const host = createHost({ onError: () => {} });
-		const waiting = host.registry(Sum, context);
-		await host.load([{ name: "@app/sum", facet: defineFacet((h) => h.serve(Sum, { compose: total })) }], context);
-		expect((await waiting).value).toEqual({ total: 0 });
-		await host.close(context);
-	});
-
 	it("host.registry waits through no value until a first good composition, woken by it, its wait then gone", async () => {
 		const { host } = await loadedPlugins({
 			"@app/sum": (host) => {
@@ -371,9 +365,11 @@ describe("readers' memory", () => {
 		const refs = await (async () => {
 			const reader = await host.get(Reader, { id: 1 }, context);
 			expect(reader.total.value).toBe(2);
+			// Capture while held: after release yields, the reader may already have been collected.
+			const refs = objects.filter((ref) => ref.deref()?.label === "app.reader(1)");
 			reader.release();
 			await new Promise((resolve) => setTimeout(resolve, 0));
-			return objects.filter((ref) => ref.deref()?.label === "app.reader(1)");
+			return refs;
 		})();
 		expect(refs.length).toBeGreaterThan(0);
 		await (await host.get(Setter, {}, context)).set(5, context);

@@ -1,8 +1,10 @@
 import { Box, type Component, Markdown, type MarkdownTheme, MouseRegion, rgbColor, Text } from "@earendil-works/pi-tui";
+import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import type { CompactionSummaryMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { Gutter } from "./gutter.ts";
 import { keyText } from "./keybinding-hints.ts";
+import { createMarkdownTransform } from "./markdown-transform.ts";
 
 /**
  * Component that renders a compaction message with collapsed/expanded state.
@@ -13,11 +15,24 @@ export class CompactionSummaryMessageComponent extends Box {
 	private expanded = false;
 	private message: CompactionSummaryMessage;
 	private markdownTheme: MarkdownTheme;
+	private markdownTransformers: readonly MarkdownTransformer[];
+	private messageId?: string;
+	private timestamp?: string;
 
-	constructor(message: CompactionSummaryMessage, markdownTheme: MarkdownTheme = getMarkdownTheme(), outputPad = 1) {
+	constructor(
+		message: CompactionSummaryMessage,
+		markdownTheme: MarkdownTheme = getMarkdownTheme(),
+		outputPad = 1,
+		markdownTransformers: readonly MarkdownTransformer[] = [],
+		messageId?: string,
+		timestamp?: string,
+	) {
 		super(outputPad, 0);
 		this.message = message;
 		this.markdownTheme = markdownTheme;
+		this.markdownTransformers = markdownTransformers;
+		this.messageId = messageId;
+		this.timestamp = timestamp;
 		this.updateDisplay();
 	}
 
@@ -53,7 +68,22 @@ export class CompactionSummaryMessageComponent extends Box {
 				this.message.tokensBefore > 0
 					? `**Conversation compacted** (${tokenStr} → ~${this.estimateTokensAfter().toLocaleString()} tokens)\n\n`
 					: "**Conversation compacted**\n\n";
-			child = new Markdown(header + this.message.summary, 0, 0, this.markdownTheme);
+			const transform = createMarkdownTransform(
+				"summary",
+				() => false,
+				this.markdownTransformers,
+				this.messageId,
+				this.timestamp,
+			);
+			child = new Markdown(
+				this.message.summary,
+				0,
+				0,
+				this.markdownTheme,
+				undefined,
+				// Transformers see only the summary content, not Pi's header.
+				{ transform: (markdown, width) => header + transform(markdown, width) },
+			);
 		} else {
 			child = new Text(
 				theme.fg("muted", "Conversation compacted") +

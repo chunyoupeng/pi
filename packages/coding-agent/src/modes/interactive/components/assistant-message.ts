@@ -92,6 +92,13 @@ export class AssistantMessageComponent extends Container {
 	private timestamp?: string;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	private markdownSlots: MarkdownSlot[] = [];
+	private renderCache?: {
+		source: readonly string[];
+		width: number;
+		outputPad: number;
+		hasToolCalls: boolean;
+		lines: readonly string[];
+	};
 
 	constructor(
 		message?: AssistantMessage,
@@ -124,6 +131,7 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.renderCache = undefined;
 		if (this.lastMessage) {
 			this.applyContent(this.lastMessage);
 		}
@@ -172,7 +180,7 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		const prefixSymbol = "⏺";
 		const prefixString = `${theme.fg("text", prefixSymbol)} `;
 		const prefixWidth = visibleWidth(prefixSymbol) + 1;
@@ -183,6 +191,16 @@ export class AssistantMessageComponent extends Container {
 		const childLines = this.contentContainer.render(contentWidth);
 		if (childLines.length === 0) {
 			return [];
+		}
+
+		if (
+			this.renderCache &&
+			this.renderCache.source === childLines &&
+			this.renderCache.width === width &&
+			this.renderCache.outputPad === outputPad &&
+			this.renderCache.hasToolCalls === this.hasToolCalls
+		) {
+			return this.renderCache.lines;
 		}
 
 		const leftPad = " ".repeat(outputPad);
@@ -205,16 +223,22 @@ export class AssistantMessageComponent extends Container {
 			}
 		}
 
-		if (this.hasToolCalls || lines.length === 0) {
-			return lines;
+		if (!this.hasToolCalls && lines.length > 0) {
+			if (lines.length === 1) {
+				lines[0] = OSC133_ZONE_START + OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[0];
+			} else {
+				lines[0] = OSC133_ZONE_START + lines[0];
+				lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+			}
 		}
 
-		if (lines.length === 1) {
-			lines[0] = OSC133_ZONE_START + OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[0];
-		} else {
-			lines[0] = OSC133_ZONE_START + lines[0];
-			lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
-		}
+		this.renderCache = {
+			source: childLines,
+			width,
+			outputPad,
+			hasToolCalls: this.hasToolCalls,
+			lines,
+		};
 		return lines;
 	}
 

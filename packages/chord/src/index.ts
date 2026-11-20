@@ -1,6 +1,6 @@
 // Chord (`@earendil-works/chord`, v2, experimental): every layer's API for apps, and the store's surface for adapters
 // (Durable's `StoreStorage`), marked internal. The Node components and the client surfaces are subpaths (`/http`,
-// `/workers`, `/plugins`, `/app`, `/surfaces`, `/web`, `/react`, `/tui`); Chord v1 is `/old`.
+// `/workers`, `/plugins`, `/app`, `/surfaces`, `/web`, `/react`, `/tui`).
 
 export * from "./contracts/index.ts";
 export * from "./data/index.ts";
@@ -39,8 +39,6 @@ export {
 	type StoredDocument,
 	writeContent,
 } from "./store/engine.ts";
-/** @internal */
-export type { WhereNode } from "./store/expression.ts";
 export * from "./store/index.ts";
 /** @internal */
 export type { EncodedRow } from "./store/rows.ts";
@@ -51,3 +49,4 @@ export type { StagedWrite, Step } from "./store/step.ts";
 /** @internal */
 export type { ChordStore, SeriesCommit, SeriesResult } from "./store/store.ts";
 export * from "./surfaces/index.ts";
+export { CHORD_TELEMETRY_SCHEMA, type ChordSpanName } from "./telemetry.ts";

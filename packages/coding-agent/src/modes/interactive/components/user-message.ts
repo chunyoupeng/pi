@@ -18,6 +18,12 @@ export class UserMessageComponent extends Container {
 	private markdown!: Markdown;
 	private messageId?: string;
 	private timestamp?: string;
+	private renderCache?: {
+		source: readonly string[];
+		width: number;
+		outputPad: number;
+		lines: readonly string[];
+	};
 
 	constructor(
 		text: string,
@@ -39,11 +45,13 @@ export class UserMessageComponent extends Container {
 
 	setOutputPad(padding: number): void {
 		this.outputPad = padding;
+		this.renderCache = undefined;
 		this.markdown.invalidate();
 	}
 
 	override invalidate(): void {
 		super.invalidate();
+		this.renderCache = undefined;
 		this.markdown.invalidate();
 	}
 
@@ -71,7 +79,7 @@ export class UserMessageComponent extends Container {
 		);
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		const prefixSymbol = "❯";
 		const prefixString = `${theme.fg("accent", prefixSymbol)} `;
 		const prefixWidth = visibleWidth(prefixSymbol) + 1;
@@ -82,6 +90,15 @@ export class UserMessageComponent extends Container {
 		const childLines = this.markdown.render(contentWidth);
 		if (childLines.length === 0) {
 			return [];
+		}
+
+		if (
+			this.renderCache &&
+			this.renderCache.source === childLines &&
+			this.renderCache.width === width &&
+			this.renderCache.outputPad === outputPad
+		) {
+			return this.renderCache.lines;
 		}
 
 		const leftPad = " ".repeat(outputPad);
@@ -108,6 +125,13 @@ export class UserMessageComponent extends Container {
 			lines[0] = OSC133_ZONE_START + lines[0];
 			lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 		}
+
+		this.renderCache = {
+			source: childLines,
+			width,
+			outputPad,
+			lines,
+		};
 		return lines;
 	}
 }

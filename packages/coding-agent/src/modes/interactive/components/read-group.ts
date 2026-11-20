@@ -179,7 +179,7 @@ export class ReadGroupComponent extends Container {
 		this.updateDisplay();
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		if (this.argsPending) this.updateDisplay();
 		if (this.entries.length === 0) return [];
 		return super.render(width);

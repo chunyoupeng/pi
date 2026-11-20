@@ -31,7 +31,7 @@ const EMPTY_USAGE: Usage = {
 	},
 };
 
-function renderComponent(component: { render(width: number): string[] }, width = 120): string {
+function renderComponent(component: { render(width: number): readonly string[] }, width = 120): string {
 	return stripAnsi(component.render(width).join("\n"));
 }
 
@@ -67,6 +67,7 @@ type FakeInteractiveContext = {
 	turnTools: Set<ToolCallHandle>;
 	chatContainer: Container;
 	loadedResourcesContainer: Container;
+	pendingMessagesContainer: Container;
 	footer: { invalidate(): void; setLiveOutputTokens(tokens: number): void };
 	programStatus: { handleEvent(): void };
 	ui: TUI;
@@ -128,6 +129,7 @@ function createFakeInteractiveContext(options?: {
 		turnTools: new Set<ToolCallHandle>(),
 		chatContainer,
 		loadedResourcesContainer: new Container(),
+		pendingMessagesContainer: new Container(),
 		footer: { invalidate: vi.fn(), setLiveOutputTokens: vi.fn() },
 		programStatus: { handleEvent: vi.fn() },
 		ui: createFakeTui(),

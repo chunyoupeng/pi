@@ -5,6 +5,7 @@
 // component's own answers, throwing routes and wraps, a reload swapping a route while a request runs, `close` (also
 // while authenticating), a mounted handler, and requests' scopes collected.
 
+import { InMemoryTelemetryContext, type TelemetryCarrier, type TelemetryContext } from "@earendil-works/pi-telemetry";
 import { describe, expect, it, vi } from "vitest";
 import { withAbortSignal } from "../../../src/context/index.ts";
 import { arr, local, method, str } from "../../../src/contracts/index.ts";
@@ -41,24 +42,15 @@ function sleepThen<T>(ms: number, value: T): Promise<T> {
 const LOOPBACK = { localAddress: "127.0.0.1", localPort: 8788 };
 
 describe("startup", () => {
-	it("fetch waits for the publication, then serves; the registries are resolved once", async () => {
+	it("fetch answers 503 before load at once, then serves; the registries are resolved once", async () => {
 		const server = await served({ "@app/who": whoami }, { load: false });
 		const registry = vi.spyOn(server.host, "registry");
-		const early = server.http.fetch(loopback("/whoami"), LOOPBACK);
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect((await server.http.fetch(loopback("/whoami"), LOOPBACK)).status).toBe(503);
 		await server.load();
-		expect(await (await early).text()).toBe("null");
+		expect(await (await server.http.fetch(loopback("/whoami"), LOOPBACK)).text()).toBe("null");
 		const calls = registry.mock.calls.length;
 		for (let i = 0; i < 3; i++) await server.http.fetch(loopback("/whoami"), LOOPBACK);
 		expect(registry.mock.calls.length).toBe(calls);
-		await server.close();
-	});
-
-	it("answers 503 to a request waiting past the host's readyTimeout", async () => {
-		const server = await served({}, { load: false, readyTimeout: 50 });
-		expect((await server.http.fetch(loopback("/x"), LOOPBACK)).status).toBe(503);
-		await server.load();
-		expect((await server.http.fetch(loopback("/x"), LOOPBACK)).status).toBe(404);
 		await server.close();
 	});
 
@@ -655,7 +647,7 @@ describe("cancellation", () => {
 	});
 
 	// Astra's recheck R4, Sol's N1: a close before the first resolution started a stopped watch; its throw ended the process.
-	it("a close before the publication leaves nothing running: the waiting request answers 503", async () => {
+	it("a close before load leaves nothing running: the early request answers 503", async () => {
 		const server = await served({}, { load: false, config: { listen: undefined } });
 		const waiting = server.http.fetch(loopback("/x"), LOOPBACK);
 		await server.http.close(withAbortSignal(AbortSignal.abort(), context));
@@ -951,5 +943,93 @@ describe("GC", () => {
 		for (let i = 0; i < 5; i++) await send(server.port, "GET", "/r");
 		await expectCollected(...refs);
 		await server.close();
+	});
+});
+
+describe("request spans (slice 9)", () => {
+	/** An adapter reading a W3C `traceparent` as the carrier of `parent`, its first span. */
+	class W3cTelemetry extends InMemoryTelemetryContext {
+		parent: TelemetryCarrier | undefined;
+		readonly extracted: (TelemetryCarrier | undefined)[] = [];
+
+		override extract(carrier: TelemetryCarrier | undefined): TelemetryContext {
+			this.extracted.push(carrier);
+			if (carrier?.traceparent !== TRACEPARENT || this.parent === undefined) return super.extract(carrier);
+			return super.extract(this.parent);
+		}
+	}
+
+	const TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+	const items = contributing({
+		routes: {
+			"GET /items/:id": {
+				public: true,
+				handler: (_request, ctx) => ctx.trace("app.lookup", {}, async () => ({ kind: "json", value: 1 })),
+			},
+			"GET /broken": {
+				public: true,
+				handler: async () => {
+					throw new Error("bug");
+				},
+			},
+		},
+		relays: [
+			{
+				name: "radius",
+				verify: (request) =>
+					request.headers.get("x-relay") === "secret" ? { origin: "https://me.relay.example" } : undefined,
+			},
+		],
+	});
+
+	it("traces a routed request: its method, route pattern and status, never its path; its handler's ctx under it", async () => {
+		const telemetry = new W3cTelemetry();
+		const server = await served({ "@app/items": items }, { config: { telemetry } });
+		expect((await send(server.port, "GET", "/items/secret-id")).status).toBe(200);
+		expect((await send(server.port, "GET", "/broken")).status).toBe(500);
+		expect((await send(server.port, "GET", "/nowhere")).status).toBe(404);
+		await server.close();
+		const requests = telemetry.getSpans().filter(({ name }) => name === "chord.http");
+		expect(requests.map(({ attributes, parentId, status }) => [attributes, parentId, status.status])).toEqual([
+			[{ "chord.host": "client", method: "GET", route: "GET /items/:id", status: 200 }, null, "ok"],
+			[{ "chord.host": "client", method: "GET", route: "GET /broken", status: 500 }, null, "error"],
+		]);
+		expect(JSON.stringify(telemetry.getSpans())).not.toContain("secret-id");
+		const lookup = telemetry.getSpans().find(({ name }) => name === "app.lookup")!;
+		expect(lookup.parentId).toBe(requests[0]!.id);
+	});
+
+	it("continues a W3C traceparent only from a request a contributed relay verified", async () => {
+		const telemetry = new W3cTelemetry();
+		const parent = await telemetry.startSpan({ name: "edge" }, (span) => telemetry.inject(span));
+		telemetry.parent = parent;
+		const server = await served({ "@app/items": items }, { config: { telemetry } });
+		const headers = { traceparent: TRACEPARENT, "x-forwarded-for": "203.0.113.9", "x-relay": "secret" };
+		expect((await send(server.port, "GET", "/items/1", { headers })).status).toBe(200);
+		expect((await send(server.port, "GET", "/items/2", { headers: { traceparent: TRACEPARENT } })).status).toBe(200);
+		await server.close();
+		const spans = telemetry.getSpans();
+		const edge = spans.find(({ name }) => name === "edge")!;
+		expect(spans.filter(({ name }) => name === "chord.http").map(({ parentId }) => parentId)).toEqual([
+			edge.id,
+			null,
+		]);
+	});
+
+	it("takes a relayed traceparent and tracestate only within their bounds and printable (review L2)", async () => {
+		const telemetry = new W3cTelemetry();
+		const server = await served({ "@app/items": items }, { config: { telemetry } });
+		const relay = { "x-forwarded-for": "203.0.113.9", "x-relay": "secret" };
+		const get = (headers: Record<string, string>) =>
+			send(server.port, "GET", "/items/1", { headers: { ...relay, ...headers } });
+		expect((await get({ traceparent: TRACEPARENT, tracestate: "a=1, b=2" })).status).toBe(200);
+		expect((await get({ traceparent: `00-${"a".repeat(300)}` })).status).toBe(200);
+		expect((await get({ traceparent: TRACEPARENT, tracestate: "s".repeat(513) })).status).toBe(200);
+		await server.close();
+		expect(telemetry.extracted).toEqual([
+			{ traceparent: TRACEPARENT, tracestate: "a=1, b=2" },
+			{ traceparent: TRACEPARENT },
+		]);
 	});
 });

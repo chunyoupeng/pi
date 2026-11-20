@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION } from "../../src/data/internal.ts";
 import { createHost, type HostError } from "../../src/host/index.ts";
 import { memoryLinkPair } from "../../src/link/index.ts";
 import { binaryCodec, Channel, type Message, textCodec } from "../../src/link/internal.ts";
+import { chordMetrics } from "../../src/telemetry.ts";
 import {
 	bindNext,
 	expectCollected,
@@ -95,10 +96,13 @@ forEachCodec(() =>
 			const [a, b] = memoryLinkPair();
 			client.connect(a, { principal: { kind: "server" }, codec: testCodec() }, context);
 			const peer = new RawPeer(b, { hello: false });
-			const got = client.get(Thing, {}, context, { readyTimeout: 20 });
+			// The expectation is attached at once: on a slow machine the 20 ms pass before `flushed` returns.
+			const failed = expect(client.get(Thing, {}, context, { readyTimeout: 20 })).rejects.toThrow(
+				"app.thing: did not become live within 20 ms",
+			);
 			await flushed();
 			expect(peer.kinds()).toEqual(["hello"]);
-			await expect(got).rejects.toThrow("app.thing: did not become live within 20 ms");
+			await failed;
 			peer.send({ kind: "hello", protocol: PROTOCOL_VERSION, incarnation: RAW_PEER, calls: 256 });
 			await transported();
 			expect(peer.kinds()).toEqual(["hello", "hold", "release"]);
@@ -157,6 +161,30 @@ describe("the heartbeat", () => {
 		await elapse(15_000);
 		expect(peer.closed).toBe(true);
 		expect(notes.state.value).toEqual({ kind: "loading" });
+	});
+
+	it("counts no pause of this process as silence (a sleeping laptop): pings at once, closes 15 s later unanswered", async () => {
+		const { peer } = await rawLinked(() => {});
+		await elapse(3_000);
+		// The process sleeps 10 minutes: no timer runs meanwhile, the clock jumps.
+		vi.setSystemTime(Date.now() + 600_000);
+		await elapse(1_500);
+		expect(peer.closed).toBe(false);
+		expect(peer.kinds()).toEqual(["hello", "ping"]);
+		await elapse(13_500);
+		expect(peer.closed).toBe(false);
+		await elapse(1_500);
+		expect(peer.closed).toBe(true);
+	});
+
+	it("keeps a link through a pause when its peer answers the ping", async () => {
+		const { peer } = await rawLinked(() => {});
+		await elapse(20_000);
+		vi.setSystemTime(Date.now() + 600_000);
+		await elapse(1_500);
+		peer.send({ kind: "pong" });
+		await elapse(25_000);
+		expect(peer.closed).toBe(false);
 	});
 
 	it("sends no pings on a busy link", async () => {
@@ -233,6 +261,66 @@ describe("trusted links", () => {
 	});
 });
 
+describe("a fence (slice 14 §2.3)", () => {
+	/** An open channel and the raw peer at its other end, which answers no `ping` by itself. */
+	async function fenced() {
+		const [a, b] = memoryLinkPair();
+		const handler = { opened: () => {}, closed: () => {}, message: () => {} };
+		const options = {
+			codec: testCodec(),
+			incarnation: RAW_PEER,
+			calls: 1,
+			trusted: true,
+			report: () => {},
+			metrics: chordMetrics(undefined),
+		};
+		const channel = new Channel(a, handler, options, context);
+		channel.start();
+		const peer = new RawPeer(b);
+		await peer.next("hello");
+		await transported();
+		return { channel, peer };
+	}
+
+	forEachCodec(() => {
+		it("runs after the pong of its own ping: a liveness pong in transit does not end it", async () => {
+			const { channel, peer } = await fenced();
+			const ran: string[] = [];
+			// A liveness `ping` goes out (the link was silent); its `pong` is still in transit when the fence starts.
+			channel.tick(Date.now() + 20_000, 0, 15_000, 30_000);
+			channel.fence(() => void ran.push("first"));
+			channel.fence(() => void ran.push("second"));
+			await transported();
+			expect(peer.kinds().filter((kind) => kind === "ping").length).toBe(3);
+			peer.send({ kind: "pong" });
+			await transported();
+			expect(ran).toEqual([]);
+			peer.send({ kind: "pong" });
+			await transported();
+			expect(ran).toEqual(["first"]);
+			peer.send({ kind: "pong" });
+			await transported();
+			expect(ran).toEqual(["first", "second"]);
+		});
+
+		it("is cancelled by what it returned, and runs nothing once the link closed", async () => {
+			const { channel, peer } = await fenced();
+			const ran: string[] = [];
+			const cancel = channel.fence(() => void ran.push("cancelled"));
+			channel.fence(() => void ran.push("kept"));
+			cancel();
+			peer.send({ kind: "pong" });
+			peer.send({ kind: "pong" });
+			await transported();
+			expect(ran).toEqual(["kept"]);
+			channel.fence(() => void ran.push("closed"));
+			channel.close();
+			await transported();
+			expect(ran).toEqual(["kept"]);
+		});
+	});
+});
+
 describe("in-order handling", () => {
 	/** A channel whose handler handles `release` of hold 0 asynchronously (until `finish`), every other message at once. */
 	async function holding() {
@@ -263,6 +351,7 @@ describe("in-order handling", () => {
 			calls: 1,
 			trusted: true,
 			report: (e: unknown) => reports.push(e),
+			metrics: chordMetrics(undefined),
 		};
 		new Channel(a, handler, options, context).start();
 		const peer = new RawPeer(b);

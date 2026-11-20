@@ -175,7 +175,8 @@ describe("parked_long (dependency model §7, audit A11)", () => {
 			{ kind: "parked_long", object: "app.view(1)", waitingFor: "app.missing", state: "failed", since: 0 },
 		]);
 		await vi.advanceTimersByTimeAsync(60_000);
-		expect(errors).toHaveLength(1);
+		// Its unbound reference was reported too, after 5 s (`unbound_long`, unbound-clock.test.ts); no second parked_long.
+		expect(errors.map(({ kind }) => kind)).toEqual(["parked_long", "unbound_long"]);
 		expect(view.state.value).toMatchObject({ kind: "failed", cause: { kind: "waiting" } });
 		view.release();
 		await host.close(context);
@@ -313,7 +314,7 @@ describe("parked_long (dependency model §7, audit A11)", () => {
 			readyTimeout: 1_000,
 		});
 		const view = host.hold(View, { id: 1 }, context);
-		await vi.advanceTimersByTimeAsync(5_000);
+		await vi.advanceTimersByTimeAsync(4_000);
 		expect(errors.map(({ kind }) => kind)).toEqual(["parked_long"]);
 		// A reload of its plugin replaces the parked attempt: a new episode, its clock from its own parking.
 		const changed = defineFacet((h) => h.serve(View, (_, self) => ({ n: self.get(Missing, {}).n })));
@@ -326,7 +327,7 @@ describe("parked_long (dependency model §7, audit A11)", () => {
 			object: "app.view(1)",
 			waitingFor: "app.missing",
 			state: "failed",
-			since: 5_000,
+			since: 4_000,
 		});
 		view.release();
 		await host.close(context);
@@ -381,5 +382,56 @@ describe("a getter of a parked object (fix round 1, Astra 6)", () => {
 			message: "waiting for app.notes(S1): specific provider absence",
 		});
 		await host.close(context);
+	});
+});
+
+describe("a denied dependency (slice 14 §2.2)", () => {
+	/** A client whose `View` declares a remote `Notes`, and the raw parent that answers its hold. */
+	async function viewOverParent(readyTimeout?: number) {
+		const errors: HostError[] = [];
+		const host = createHost<TestPrincipal>({ readyTimeout, onError: (error) => errors.push(error) });
+		const peer = await rawParent(host);
+		const facet = defineFacet<TestPrincipal>((h) =>
+			h.serve(View, (_, self) => ({ n: self.get(Notes, { session: "S1" }).count })),
+		);
+		await host.load([{ name: "@test/view", facet }], context);
+		return { host, peer, errors };
+	}
+
+	const denial = { kind: "chord", error: { code: "forbidden", message: "no access" } } as const;
+
+	it("parks its dependent showing the denial, not broken as an authority refusal: it goes on with the next bound", async () => {
+		const { host, peer, errors } = await viewOverParent();
+		const view = host.hold(View, { id: 1 }, context);
+		const { hold } = await peer.next("hold");
+		peer.send({ kind: "failed", hold, cause: { kind: "denied", error: denial } });
+		await transported();
+		expect(view.state.value).toMatchObject({
+			kind: "failed",
+			cause: { kind: "denied", error: { code: "forbidden", message: "no access" } },
+			retryAt: undefined,
+		});
+		// The same refusal as `broken` (a route's `authorize`) never heals: the difference is the cause's kind.
+		expect(failures(errors)).toEqual([]);
+		bindHold(peer, hold);
+		await transported();
+		expect([view.state.value.kind, view.n.value]).toEqual(["live", 0]);
+		await host.close(context);
+	});
+
+	describe("with timers", () => {
+		fakeTimers();
+
+		it("is no parked_long report, however long it stays denied", async () => {
+			const { host, peer, errors } = await viewOverParent(50);
+			const view = host.hold(View, { id: 1 }, context);
+			await vi.advanceTimersByTimeAsync(1);
+			const { hold } = await peer.next("hold");
+			peer.send({ kind: "failed", hold, cause: { kind: "denied", error: denial } });
+			await vi.advanceTimersByTimeAsync(500);
+			expect(view.state.value).toMatchObject({ kind: "failed", cause: { kind: "denied" } });
+			expect(errors.map(({ kind }) => kind)).toEqual([]);
+			await host.close(context);
+		});
 	});
 });

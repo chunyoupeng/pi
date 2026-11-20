@@ -149,7 +149,7 @@ class BashCallHeaderComponent {
 
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		if (this.expanded) {
 			return new Text(this.header, 0, 0).render(width);
 		}

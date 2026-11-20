@@ -15,7 +15,7 @@ dependency of `@earendil-works/chord`, imported only here. Exported as `@earendi
 const http = createHttp(server, {
 	listen: { host: "127.0.0.1", port: 8788 },     // Chord's own listener; port 0 picks one; none: no listener
 	links: { path: "/chord", options: (request, principal) => ({ limits, maxPayload }),     // or a value
-		opened: (request, principal) => () => linkClosed() },       // called per accepted link; its return at its close
+		opened: (request, principal, close) => () => linkClosed() },   // per accepted link; `close()` ends it; its return at its close
 	closeTimeout: 30_000,
 	onError: (error) => log(error),                 // HttpError
 }, ctx);
@@ -72,8 +72,8 @@ await http.close(ctx);   // before host.close
 - **Order:** `http.facet` (plugin `chord.http`) serves `Http` (`compose`: the router), `Authenticators` (every
   contribution in order) and, with `listen`, the listener, a host-lifetime object whose native is Chord's Node server:
   it opens right after the publication. The facet is the same object at every reload, so a reload never closes it.
-  `fetch` resolves the registries once; requests before the publication wait (503 past the host's `readyTimeout`; a
-  `close` meanwhile: 503).
+  `fetch` resolves the registries once; requests before the host's `load` answer 503 at once (`host.registry` throws
+  `not_ready` before it; decision "Mistakes that wait are reported at once" (a)).
 - **Admission** (every request and upgrade, first): local only when the connection's local address is loopback, `Host`
   is a loopback name with the listening port (`127.0.0.1`, `localhost`, `[::1]`; without it on port 80) and no
   `Forwarded`/`X-Forwarded-*` header; a forwarded request on loopback only when a contributed relay verifies it
@@ -148,7 +148,9 @@ await http.close(ctx);   // before host.close
   terminated 15 s later without an answer. A client gone while its upgrade authenticates aborts that work.
 - **Links:** `links.path` upgrades to `host.accept(webSocketLink(socket), { principal, limits })` with what
   `links.options` gives that socket (`maxPayload`: 1 MiB by default); a client that stops reading is cut off once more
-  than 4 MiB beyond the frame being sent waits.
+  than 4 MiB beyond the frame being sent waits. `links.opened(request, principal, close)` hears each accepted link; `close()`
+  terminates that link at once, as a revocation does (an app closing the links of a credential it revoked), and what
+  the hook returns is called when the link closes.
 - **Revocation:** when a router change removes the host, the relay or the socket handler a link or socket came through,
   it is terminated at once and its scope sealed (no close handshake a peer could ignore). Identity is the handler's: a
   writable contribution changing only its hosts keeps its own sockets. An upgrade is checked again against the current

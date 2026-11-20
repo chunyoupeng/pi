@@ -29,7 +29,7 @@ export class DynamicText extends Text {
 		super.invalidate();
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		if (this.builtWidth !== width) {
 			const text = this.build(width);
 			// setText drops Text's own render cache, so only push real changes.

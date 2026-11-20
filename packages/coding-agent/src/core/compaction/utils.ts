@@ -4,6 +4,7 @@
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { contentText, type Message } from "@earendil-works/pi-ai";
+import { sliceHead } from "../tools/truncate.ts";
 
 // ============================================================================
 // File Operation Tracking
@@ -99,13 +100,9 @@ const TOOL_RESULT_MAX_CHARS = 2000;
  */
 function truncateForSummary(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
-	let end = maxChars;
-	if (end > 0) {
-		const lastCode = text.charCodeAt(end - 1);
-		if (lastCode >= 0xd800 && lastCode <= 0xdbff) end--;
-	}
-	const truncatedChars = text.length - end;
-	return `${text.slice(0, end)}\n\n[... ${truncatedChars} more characters truncated]`;
+	const truncated = sliceHead(text, maxChars);
+	const truncatedChars = text.length - truncated.length;
+	return `${truncated}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
 /**

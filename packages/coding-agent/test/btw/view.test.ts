@@ -512,7 +512,7 @@ describe("BtwView fullscreen component", () => {
 
 		const rendered = lines.join("\n");
 		expect(rendered).toContain("\x1b_pi:c\x07");
-		expect(stripAnsi(rendered)).toContain("First line of query");
+		expect(stripAnsi(rendered.replace(/\x1b_[^\x07]*\x07/g, ""))).toContain("First line of query");
 	});
 
 	it("renders cleanly across tiny terminal heights (3-7 rows) preserving cursor marker", () => {
@@ -548,7 +548,7 @@ describe("BtwView fullscreen component", () => {
 
 			const rendered = lines.join("\n");
 			expect(rendered).toContain("\x1b_pi:c\x07");
-			expect(stripAnsi(rendered)).toContain("Line 1 in tiny");
+			expect(stripAnsi(rendered.replace(/\x1b_[^\x07]*\x07/g, ""))).toContain("Line 1 in tiny");
 			tinyView.dispose();
 		}
 	});
