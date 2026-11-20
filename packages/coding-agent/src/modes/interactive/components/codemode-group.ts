@@ -1,6 +1,7 @@
 import { Box, Container, MouseRegion, Spacer, Text, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { formatToolDuration } from "../../../core/tools/render-utils.ts";
 import type { CodemodeToolDetails } from "../../../extensions/codemode/tool.ts";
-import { theme } from "../theme/theme.ts";
+import { type ThemeColor, theme } from "../theme/theme.ts";
 import { Gutter } from "./gutter.ts";
 import {
 	type ToolCallHandle,
@@ -12,6 +13,23 @@ import {
 
 const STATUS_BULLET = "⏺";
 const CALL_GUTTER_WIDTH = 2;
+const DETAILS_GUTTER_WIDTH = 5;
+const DETAILS_BRANCH = "└─";
+
+const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const WRITE_TOOLS = new Set(["edit", "write"]);
+const SHELL_TOOLS = new Set(["bash", "powershell"]);
+
+function toolNameColor(name: string): ThemeColor {
+	if (READ_TOOLS.has(name)) return "accent";
+	if (WRITE_TOOLS.has(name)) return "warning";
+	if (SHELL_TOOLS.has(name)) return "bashMode";
+	return "syntaxFunction";
+}
+
+function formatDuration(ms: number): string {
+	return ms < 1000 ? `${Math.round(ms)}ms` : formatToolDuration(ms);
+}
 
 interface CodemodeGroupEntry {
 	readonly toolCallId: string;
@@ -22,8 +40,13 @@ interface CodemodeGroupEntry {
 
 /**
  * Groups consecutive `codemode` tool calls so that when tool output previews are collapsed
- * (e.g. after turn end or on session reload), the entire consecutive run renders as a single
- * compact line summarizing aggregated nested tool call counts (e.g. `codemode  read·4 edit·5`).
+ * (e.g. after turn end or on session reload), the entire consecutive run renders as a compact
+ * header + `└─` detail line summarizing aggregated nested tool counts and total duration:
+ *
+ * ```
+ * ⏺ Codemode · 4 runs
+ *   └─ read ×2 · bash ×5 · edit ×1  (3.2s)
+ * ```
  *
  * While running, uncollapsed, or expanded, each call renders through its normal
  * {@link ToolExecutionComponent}.
@@ -32,6 +55,7 @@ export class CodemodeGroupComponent extends Container {
 	private readonly summarySpacer: Spacer;
 	private readonly summaryBox: Box;
 	private readonly summaryGutter: Gutter;
+	private readonly detailsGutter: Gutter;
 	private readonly summaryRegion: MouseRegion;
 	private readonly childrenContainer: Container;
 	private readonly ui: TUI;
@@ -56,6 +80,10 @@ export class CodemodeGroupComponent extends Container {
 		this.summarySpacer = new Spacer(1);
 		this.summaryBox = new Box(0, 0);
 		this.summaryGutter = new Gutter({ width: CALL_GUTTER_WIDTH, marker: () => this.renderStatusBullet() });
+		this.detailsGutter = new Gutter({
+			width: DETAILS_GUTTER_WIDTH,
+			marker: () => `  ${theme.fg("dim", DETAILS_BRANCH)}`,
+		});
 		this.summaryRegion = new MouseRegion(this.summaryBox, (event) => {
 			if (event.type !== "click" || event.button !== "left") return undefined;
 			this.setExpanded(true);
@@ -218,23 +246,48 @@ export class CodemodeGroupComponent extends Container {
 		return theme.fg(hasError ? "error" : "success", STATUS_BULLET);
 	}
 
-	private formatSummaryLine(): string {
-		const title = theme.fg("toolTitle", theme.bold("codemode"));
+	private formatSummaryHeader(): string {
+		const title = theme.fg("toolTitle", theme.bold("Codemode"));
+		if (this.entries.length > 1) {
+			return `${title} ${theme.fg("dim", "·")} ${theme.fg("muted", `${this.entries.length} runs`)}`;
+		}
+		return title;
+	}
+
+	private formatSummaryDetails(): string | undefined {
 		const counts = new Map<string, number>();
+		let failedNestedCalls = 0;
+		let failedScripts = 0;
+		let totalDurationMs = 0;
+		let hasDuration = false;
+
 		for (const entry of this.entries) {
+			if (entry.result?.isError) failedScripts++;
+			if (entry.result?.durationMs !== undefined) {
+				totalDurationMs += entry.result.durationMs;
+				hasDuration = true;
+			}
 			const calls = (entry.result?.details as CodemodeToolDetails | undefined)?.calls;
 			if (!calls) continue;
 			for (const call of calls) {
 				counts.set(call.name, (counts.get(call.name) ?? 0) + 1);
+				if (call.status === "error") failedNestedCalls++;
 			}
 		}
 
-		if (counts.size === 0) {
-			return this.entries.length > 1 ? `${title}  ${theme.fg("muted", `×${this.entries.length}`)}` : title;
+		const parts: string[] = [];
+		for (const [name, count] of counts.entries()) {
+			parts.push(`${theme.fg(toolNameColor(name), name)} ${theme.fg("dim", `×${count}`)}`);
+		}
+		const failedCount = failedNestedCalls > 0 ? failedNestedCalls : failedScripts;
+		if (failedCount > 0) {
+			parts.push(theme.fg("error", `${failedCount} failed`));
 		}
 
-		const summary = [...counts.entries()].map(([name, count]) => `${name}·${count}`).join(" ");
-		return `${title}  ${theme.fg("muted", summary)}`;
+		const body = parts.join(` ${theme.fg("dim", "·")} `);
+		const duration = hasDuration ? theme.fg("dim", `(${formatDuration(totalDurationMs)})`) : "";
+		if (body && duration) return `${body}  ${duration}`;
+		return body || duration || undefined;
 	}
 
 	private updateDisplay(): void {
@@ -245,8 +298,13 @@ export class CodemodeGroupComponent extends Container {
 			this.summaryBox.setBgFn(undefined);
 			this.summaryBox.setPaddingX(this.outputPad);
 			this.summaryBox.clear();
-			this.summaryGutter.setChild(new Text(this.formatSummaryLine(), 0, 0));
+			this.summaryGutter.setChild(new Text(this.formatSummaryHeader(), 0, 0));
 			this.summaryBox.addChild(this.summaryGutter);
+			const details = this.formatSummaryDetails();
+			if (details) {
+				this.detailsGutter.setChild(new Text(details, 0, 0));
+				this.summaryBox.addChild(this.detailsGutter);
+			}
 			this.addChild(this.summarySpacer);
 			this.addChild(this.summaryRegion);
 		} else {

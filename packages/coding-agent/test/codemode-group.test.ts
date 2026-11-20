@@ -48,12 +48,17 @@ function makeNestedCalls(names: readonly string[]): CodemodeNestedCall[] {
 	}));
 }
 
-function makeCodemodeResult(output: string, nestedToolNames: readonly string[], isError = false) {
+function makeCodemodeResult(
+	output: string,
+	nestedToolNames: readonly string[],
+	options: { isError?: boolean; durationMs?: number } = {},
+) {
 	const details: CodemodeToolDetails = { calls: makeNestedCalls(nestedToolNames) };
 	return {
 		content: [{ type: "text" as const, text: output }],
 		details,
-		isError,
+		isError: options.isError ?? false,
+		durationMs: options.durationMs,
 	};
 }
 
@@ -236,15 +241,19 @@ describe("CodemodeGroupComponent", () => {
 		initTheme("dark");
 	});
 
-	it("keeps individual scripts/outputs visible before collapse, then merges into one summary line when collapsed", () => {
+	it("keeps individual scripts/outputs visible before collapse, then merges into Option C header + └─ detail line when collapsed", () => {
 		const ui = createFakeTui();
 		const group = new CodemodeGroupComponent({ showImages: false }, ui, "/repo");
 
 		const first = group.addCall("c1", { code: "const FIRST_SCRIPT = 1;" }, codemodeRenderers);
-		first.updateResult(makeCodemodeResult("FIRST_OUT", ["read", "read", "edit"]));
+		first.updateResult(makeCodemodeResult("FIRST_OUT", ["read", "read", "edit"], { durationMs: 1200 }));
 
 		const second = group.addCall("c2", { code: "const SECOND_SCRIPT = 2;" }, codemodeRenderers);
-		second.updateResult(makeCodemodeResult("SECOND_OUT", ["read", "read", "edit", "edit", "edit", "edit"]));
+		second.updateResult(
+			makeCodemodeResult("SECOND_OUT", ["read", "read", "bash", "edit", "edit", "edit", "edit"], {
+				durationMs: 2000,
+			}),
+		);
 
 		// Uncollapsed: both scripts and outputs are rendered normally
 		const liveOutput = renderComponent(group);
@@ -253,14 +262,20 @@ describe("CodemodeGroupComponent", () => {
 		expect(liveOutput).toContain("SECOND_SCRIPT");
 		expect(liveOutput).toContain("SECOND_OUT");
 
-		// Collapsed: single codemode line with aggregated nested tool counts
+		// Collapsed: header with run count + └─ line with semantic colors and total duration
 		group.setPreviewCollapsed(true);
-		const collapsedOutput = renderComponent(group);
-		expect(collapsedOutput).toContain("codemode  read·4 edit·5");
-		expect(collapsedOutput.match(/codemode/g)).toHaveLength(1);
+		const collapsedLines = group.render(120);
+		const collapsedOutput = stripAnsi(collapsedLines.join("\n"));
+		expect(collapsedOutput).toContain("⏺ Codemode · 2 runs");
+		expect(collapsedOutput).toContain("└─ read ×4 · edit ×5 · bash ×1  (3.2s)");
+		expect(collapsedOutput.match(/Codemode/g)).toHaveLength(1);
 		expect(collapsedOutput).not.toContain("FIRST_SCRIPT");
 		expect(collapsedOutput).not.toContain("SECOND_OUT");
-		expect(group.render(120).find((line) => stripAnsi(line).includes("⏺"))).toContain(theme.fg("success", "⏺"));
+		expect(collapsedLines.find((line) => stripAnsi(line).includes("⏺"))).toContain(theme.fg("success", "⏺"));
+		const detailLine = collapsedLines.find((line) => stripAnsi(line).includes("└─"))!;
+		expect(detailLine).toContain(theme.fg("accent", "read"));
+		expect(detailLine).toContain(theme.fg("warning", "edit"));
+		expect(detailLine).toContain(theme.fg("bashMode", "bash"));
 
 		// Expand via setExpanded -> full scripts & outputs return; collapse -> back to summary
 		group.setExpanded(true);
@@ -269,13 +284,14 @@ describe("CodemodeGroupComponent", () => {
 		expect(expandedOutput).toContain("SECOND_OUT");
 
 		group.setExpanded(false);
-		expect(renderComponent(group)).toContain("codemode  read·4 edit·5");
+		expect(renderComponent(group)).toContain("⏺ Codemode · 2 runs");
+		expect(renderComponent(group)).toContain("└─ read ×4 · edit ×5 · bash ×1  (3.2s)");
 		expect(renderComponent(group)).not.toContain("FIRST_SCRIPT");
 
 		// Click toggles expanded -> shows full output; second click collapses back to summary
 		const width = 120;
 		const lines = group.render(width);
-		const summaryRow = lines.findIndex((line) => stripAnsi(line).includes("codemode"));
+		const summaryRow = lines.findIndex((line) => stripAnsi(line).includes("Codemode"));
 		expect(summaryRow).toBeGreaterThanOrEqual(0);
 		const clickEvent: TuiMouseEvent = {
 			type: "click",
@@ -295,28 +311,30 @@ describe("CodemodeGroupComponent", () => {
 		expect(renderComponent(group)).toContain("FIRST_SCRIPT");
 
 		expect(group.handleMouse(clickEvent)?.handled).toBe(true);
-		expect(renderComponent(group)).toContain("codemode  read·4 edit·5");
+		expect(renderComponent(group)).toContain("⏺ Codemode · 2 runs");
 		expect(renderComponent(group)).not.toContain("FIRST_SCRIPT");
 
 		group.dispose();
 	});
 
-	it("shows bare codemode for single script with no nested calls, ×N for multiple, and red bullet on error", () => {
+	it("shows bare Codemode for single script with no nested calls, run count + failure summary on error", () => {
 		const ui = createFakeTui();
 
 		const single = new CodemodeGroupComponent({ showImages: false }, ui, "/repo");
 		const h1 = single.addCall("c1", { code: "return 1;" }, codemodeRenderers);
 		h1.updateResult(makeCodemodeResult("1", []));
 		single.setPreviewCollapsed(true);
-		expect(renderComponent(single).trim()).toBe("⏺ codemode");
+		expect(renderComponent(single).trim()).toBe("⏺ Codemode");
 
 		const multi = new CodemodeGroupComponent({ showImages: false }, ui, "/repo");
 		const m1 = multi.addCall("m1", { code: "return 1;" }, codemodeRenderers);
 		const m2 = multi.addCall("m2", { code: "throw new Error('boom');" }, codemodeRenderers);
-		m1.updateResult(makeCodemodeResult("1", []));
-		m2.updateResult(makeCodemodeResult("boom", [], true));
+		m1.updateResult(makeCodemodeResult("1", [], { durationMs: 250 }));
+		m2.updateResult(makeCodemodeResult("boom", [], { isError: true, durationMs: 150 }));
 		multi.setPreviewCollapsed(true);
-		expect(renderComponent(multi).trim()).toBe("⏺ codemode  ×2");
+		const multiPlain = renderComponent(multi);
+		expect(multiPlain).toContain("⏺ Codemode · 2 runs");
+		expect(multiPlain).toContain("└─ 1 failed  (400ms)");
 		expect(multi.render(120).find((line) => stripAnsi(line).includes("⏺"))).toContain(theme.fg("error", "⏺"));
 
 		single.dispose();
@@ -427,8 +445,11 @@ describe("InteractiveMode consecutive codemode grouping", () => {
 
 		const groups = ctx.chatContainer.children.filter((c) => c instanceof CodemodeGroupComponent);
 		expect(groups).toHaveLength(2);
-		expect(renderComponent(groups[0]!).trim()).toBe("⏺ codemode  read·4 bash·1 edit·5");
-		expect(renderComponent(groups[1]!).trim()).toBe("⏺ codemode  grep·1");
+		expect(renderComponent(groups[0]!)).toContain("⏺ Codemode · 2 runs");
+		expect(renderComponent(groups[0]!)).toContain("└─ read ×4 · bash ×1 · edit ×5");
+		expect(renderComponent(groups[1]!)).toContain("⏺ Codemode");
+		expect(renderComponent(groups[1]!)).not.toContain("runs");
+		expect(renderComponent(groups[1]!)).toContain("└─ grep ×1");
 
 		// Ctrl+O expands both groups
 		ctx.setToolsExpanded(true);
@@ -460,8 +481,10 @@ describe("InteractiveMode consecutive codemode grouping", () => {
 		renderSessionEntries.call(collapsedCtx, entries);
 		const collapsedGroups = collapsedCtx.chatContainer.children.filter((c) => c instanceof CodemodeGroupComponent);
 		expect(collapsedGroups).toHaveLength(2);
-		expect(renderComponent(collapsedGroups[0]!).trim()).toBe("⏺ codemode  read·3 edit·2");
-		expect(renderComponent(collapsedGroups[1]!).trim()).toBe("⏺ codemode  bash·1");
+		expect(renderComponent(collapsedGroups[0]!)).toContain("⏺ Codemode · 2 runs");
+		expect(renderComponent(collapsedGroups[0]!)).toContain("└─ read ×3 · edit ×2");
+		expect(renderComponent(collapsedGroups[1]!)).toContain("⏺ Codemode");
+		expect(renderComponent(collapsedGroups[1]!)).toContain("└─ bash ×1");
 		expect(renderComponent(collapsedCtx.chatContainer)).not.toContain("H_ONE");
 
 		const uncollapsedCtx = createFakeInteractiveContext({ collapseToolOutput: false });
