@@ -29,6 +29,7 @@ export { keyHint, keyText, rawKeyHint } from "./keybinding-hints.ts";
 export { LoginDialogComponent } from "./login-dialog.ts";
 export { ModelSelectorComponent } from "./model-selector.ts";
 export { OAuthSelectorComponent } from "./oauth-selector.ts";
+export { ReadGroupComponent } from "./read-group.ts";
 export { type ModelsCallbacks, type ModelsConfig, ScopedModelsSelectorComponent } from "./scoped-models-selector.ts";
 export { SessionSelectorComponent } from "./session-selector.ts";
 export { type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent } from "./settings-selector.ts";
@@ -37,7 +38,12 @@ export { SkillInvocationMessageComponent } from "./skill-invocation-message.ts";
 export { StartupPanel, type StartupPanelOptions } from "./startup-panel.ts";
 export { ThemeSelectorComponent } from "./theme-selector.ts";
 export { ThinkingSelectorComponent } from "./thinking-selector.ts";
-export { ToolExecutionComponent, type ToolExecutionOptions } from "./tool-execution.ts";
+export {
+	type ToolCallHandle,
+	ToolExecutionComponent,
+	type ToolExecutionOptions,
+	type ToolExecutionResult,
+} from "./tool-execution.ts";
 export { TreeSelectorComponent } from "./tree-selector.ts";
 export { TrustSelectorComponent } from "./trust-selector.ts";
 export { UserMessageComponent } from "./user-message.ts";

@@ -159,6 +159,11 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	/** True when this message currently renders at least one visible block (text, thinking, or error notice). */
+	hasVisibleContent(): boolean {
+		return this.contentContainer.children.length > 0;
+	}
+
 	/** Mark whether this component is receiving live stream updates. */
 	setStreaming(streaming: boolean): void {
 		this.isStreaming = streaming;

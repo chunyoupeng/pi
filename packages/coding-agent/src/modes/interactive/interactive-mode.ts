@@ -115,7 +115,7 @@ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
-import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
+import { readRenderers, type ToolRenderers, withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
@@ -161,6 +161,7 @@ import {
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
+import { ReadGroupComponent } from "./components/read-group.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -180,7 +181,7 @@ import {
 } from "./components/status-indicator.ts";
 import { ThemedText } from "./components/themed-text.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
-import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { type ToolCallHandle, ToolExecutionComponent, type ToolExecutionOptions } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -451,6 +452,55 @@ interface ExtensionChangelogUpdate {
 
 const NON_COLLAPSIBLE_PREVIEW_TOOLS = new Set(["edit", "write"]);
 
+function isDefaultReadTool(toolName: string, toolDefinition: ToolRenderers | undefined): boolean {
+	return (
+		toolName === "read" &&
+		toolDefinition?.renderCall === readRenderers.renderCall &&
+		toolDefinition?.renderResult === readRenderers.renderResult
+	);
+}
+
+function findJoinableReadGroup(chatContainer: Container): ReadGroupComponent | undefined {
+	const children = chatContainer.children;
+	for (let i = children.length - 1; i >= 0; i--) {
+		const child = children[i];
+		if (child instanceof AssistantMessageComponent && !child.hasVisibleContent()) {
+			continue;
+		}
+		if (child instanceof ReadGroupComponent && !child.isSealed()) {
+			return child;
+		}
+		return undefined;
+	}
+	return undefined;
+}
+
+function addToolCallToChat(
+	chatContainer: Container,
+	toolName: string,
+	toolCallId: string,
+	args: unknown,
+	options: ToolExecutionOptions,
+	toolDefinition: ToolRenderers | undefined,
+	ui: TUI,
+	cwd: string,
+	expanded: boolean,
+): ToolCallHandle {
+	if (isDefaultReadTool(toolName, toolDefinition)) {
+		let group = findJoinableReadGroup(chatContainer);
+		if (!group) {
+			group = new ReadGroupComponent(options, ui, cwd);
+			group.setExpanded(expanded);
+			chatContainer.addChild(group);
+		}
+		return group.addCall(toolCallId, args);
+	}
+	const component = new ToolExecutionComponent(toolName, toolCallId, args, options, toolDefinition, ui, cwd);
+	component.setExpanded(expanded);
+	chatContainer.addChild(component);
+	return component;
+}
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
@@ -511,9 +561,9 @@ export class InteractiveMode {
 	private agentStartedAt: number | undefined = undefined;
 	private completedAgentOutputTokens = 0;
 
-	// Tool execution tracking: toolCallId -> component
-	private pendingTools = new Map<string, ToolExecutionComponent>();
-	private turnTools = new Set<ToolExecutionComponent>();
+	// Tool execution tracking: toolCallId -> component handle
+	private pendingTools = new Map<string, ToolCallHandle>();
+	private turnTools = new Set<ToolCallHandle>();
 	private addToolOutputDividerBeforeNextAssistant = false;
 
 	// Tool output expansion state
@@ -3668,7 +3718,8 @@ export class InteractiveMode {
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
 							if (!this.pendingTools.has(content.id)) {
-								const component = new ToolExecutionComponent(
+								const component = addToolCallToChat(
+									this.chatContainer,
 									content.name,
 									content.id,
 									content.arguments,
@@ -3680,9 +3731,8 @@ export class InteractiveMode {
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
 									this.sessionManager.getCwd(),
+									this.toolOutputExpanded,
 								);
-								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
 								this.turnTools.add(component);
 							} else {
@@ -3737,6 +3787,7 @@ export class InteractiveMode {
 							});
 						}
 						this.pendingTools.clear();
+						findJoinableReadGroup(this.chatContainer)?.seal();
 						this.maybeSuggestBugReport(this.streamingMessage);
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
@@ -3769,7 +3820,8 @@ export class InteractiveMode {
 				if (event.parentToolCallId) break;
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
-					component = new ToolExecutionComponent(
+					component = addToolCallToChat(
+						this.chatContainer,
 						event.toolName,
 						event.toolCallId,
 						event.args,
@@ -3781,9 +3833,8 @@ export class InteractiveMode {
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
 						this.sessionManager.getCwd(),
+						this.toolOutputExpanded,
 					);
-					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
 					this.turnTools.add(component);
 				}
@@ -3836,6 +3887,7 @@ export class InteractiveMode {
 					}
 				}
 				if (!event.willRetry) {
+					findJoinableReadGroup(this.chatContainer)?.seal();
 					if (this.settingsManager.getCollapseToolOutput()) {
 						for (const component of this.turnTools) {
 							if (NON_COLLAPSIBLE_PREVIEW_TOOLS.has(component.getToolName())) {
@@ -4229,7 +4281,7 @@ export class InteractiveMode {
 		this.turnTools.clear();
 		const collapseToolOutput = this.settingsManager.getCollapseToolOutput();
 		let addDividerBeforeAssistant = false;
-		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
+		const renderedPendingTools = new Map<string, ToolCallHandle>();
 		// Cache misses are not persisted, unlike successful cache-warming usage.
 		// Re-derive them and inject them after the assistant messages that paid for them.
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
@@ -4271,7 +4323,8 @@ export class InteractiveMode {
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(
+						const component = addToolCallToChat(
+							this.chatContainer,
 							content.name,
 							content.id,
 							content.arguments,
@@ -4283,9 +4336,8 @@ export class InteractiveMode {
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
 							this.sessionManager.getCwd(),
+							this.toolOutputExpanded,
 						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -5257,7 +5309,7 @@ export class InteractiveMode {
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
+							if (child instanceof ToolExecutionComponent || child instanceof ReadGroupComponent) {
 								child.setShowImages(enabled);
 							}
 						}
@@ -5265,7 +5317,7 @@ export class InteractiveMode {
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
+							if (child instanceof ToolExecutionComponent || child instanceof ReadGroupComponent) {
 								child.setImageWidthCells(width);
 							}
 						}
@@ -5353,6 +5405,8 @@ export class InteractiveMode {
 								!this.turnTools.has(child) &&
 								!NON_COLLAPSIBLE_PREVIEW_TOOLS.has(child.getToolName())
 							) {
+								child.setPreviewCollapsed(collapsed);
+							} else if (child instanceof ReadGroupComponent && !child.isActiveInTurn(this.turnTools)) {
 								child.setPreviewCollapsed(collapsed);
 							}
 						}

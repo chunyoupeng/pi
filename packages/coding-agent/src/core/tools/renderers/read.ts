@@ -27,8 +27,8 @@ interface CompactReadClassification {
 	label: string;
 }
 const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
-type ReadRenderArgs = { path?: string; file_path?: string; offset?: unknown; limit?: unknown };
-function styledReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
+export type ReadRenderArgs = { path?: string; file_path?: string; offset?: unknown; limit?: unknown };
+export function styledReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
 	const range = formatReadLineRange(args?.offset, args?.limit);
 	return range ? theme.fg("warning", range) : "";
 }
@@ -110,7 +110,7 @@ function formatCompactReadCall(
 		expandHint
 	);
 }
-function formatReadResult(
+export function formatReadResult(
 	args: ReadRenderArgs | undefined,
 	result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
 	options: ToolRenderResultOptions,

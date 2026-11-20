@@ -29,6 +29,24 @@ export interface ToolExecutionOptions {
 	outputPad?: number;
 }
 
+export interface ToolExecutionResult {
+	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+	details?: any;
+	isError: boolean;
+	/** Execution time of a final result. */
+	durationMs?: number;
+}
+
+export interface ToolCallHandle {
+	getToolName(): string;
+	updateArgs(args: any): void;
+	markExecutionStarted(): void;
+	setArgsComplete(): void;
+	updateResult(result: ToolExecutionResult, isPartial?: boolean): void;
+	setExpanded(expanded: boolean): void;
+	setPreviewCollapsed(collapsed: boolean): void;
+}
+
 /** Keep one glyph for every state: text circles with different outlines do not share a terminal-cell centre. */
 const STATUS_BULLET = "⏺";
 /** Foreground colors cycled by the bullet while the tool is executing, giving the fixed dot a pulse. */
@@ -38,7 +56,7 @@ const RESULT_BRANCH = "⎿";
 const CALL_GUTTER_WIDTH = 2;
 const RESULT_GUTTER_WIDTH = 5;
 
-export class ToolExecutionComponent extends Container {
+export class ToolExecutionComponent extends Container implements ToolCallHandle {
 	private contentBox: Box;
 	private contentText: Text;
 	private contentTextRegion: MouseRegion;
@@ -69,12 +87,7 @@ export class ToolExecutionComponent extends Container {
 	private resultGutter: Gutter;
 	/** `updateArgs()` ran since the last display update; the next render applies it. */
 	private argsPending = false;
-	private result?: {
-		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-		isError: boolean;
-		details?: any;
-		durationMs?: number;
-	};
+	private result?: ToolExecutionResult;
 	private hideComponent = false;
 	private blinkInterval: NodeJS.Timeout | undefined;
 
@@ -252,16 +265,7 @@ export class ToolExecutionComponent extends Container {
 		this.ui.requestRender();
 	}
 
-	updateResult(
-		result: {
-			content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-			details?: any;
-			isError: boolean;
-			/** Execution time of a final result. */
-			durationMs?: number;
-		},
-		isPartial = false,
-	): void {
+	updateResult(result: ToolExecutionResult, isPartial = false): void {
 		this.result = result;
 		this.isPartial = isPartial;
 		if (!this.isRunning()) {
