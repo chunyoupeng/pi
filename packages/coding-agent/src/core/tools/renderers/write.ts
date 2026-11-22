@@ -1,5 +1,4 @@
 import { DynamicText } from "../../../modes/interactive/components/dynamic-text.ts";
-import { TOOL_PREVIEW_LINES } from "../../../modes/interactive/components/visual-truncate.ts";
 import { formatCollapsedOutput } from "../render-utils.ts";
 /**
  * Presentation for the write tool.
@@ -123,7 +122,7 @@ function formatWriteCall(
 
 	if (fileContent === null) {
 		text += `\n${theme.fg("error", "[invalid content arg - expected string]")}`;
-	} else if (fileContent) {
+	} else if (fileContent && options.expanded) {
 		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 		const renderedLines = lang
 			? (cache?.highlightedLines ?? highlighter.highlight(replaceTabs(normalizeDisplayText(fileContent)), lang))
@@ -131,8 +130,7 @@ function formatWriteCall(
 		const lines = trimTrailingEmptyLines(renderedLines);
 		const styleLine = lang ? (line: string) => line : (line: string) => theme.fg("toolOutput", replaceTabs(line));
 		const body = formatCollapsedOutput(lines.join("\n"), theme, {
-			expanded: options.expanded,
-			maxLines: TOOL_PREVIEW_LINES,
+			expanded: true,
 			styleLine,
 			width,
 		});
@@ -168,7 +166,7 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		const component =
 			(context.lastComponent as WriteCallRenderComponent | undefined) ?? new WriteCallRenderComponent();
 		component.cache =
-			fileContent !== null && !context.argsComplete
+			context.expanded && fileContent !== null && !context.argsComplete
 				? updateWriteHighlightCacheIncremental(component.cache, rawPath, fileContent, component.highlighter)
 				: undefined;
 		component.setBuilder((width) =>

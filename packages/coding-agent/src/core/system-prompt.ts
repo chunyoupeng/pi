@@ -11,7 +11,7 @@ export interface BuildSystemPromptOptions {
 	customPrompt?: string;
 	/** Exact full prompt replacement set by a before_agent_start handler. */
 	forceSystemPrompt?: string;
-	/** Tools to include in prompt. Default: [read, bash, edit, write, subagent]. */
+	/** Tools to include in prompt. Default: [read, bash, edit, write]. */
 	selectedTools?: string[];
 	/**
 	 * Selected tools whose declarations requests leave out (`prepareLoadout` hidden declarations).
@@ -61,7 +61,7 @@ export function normalizeBuildSystemPromptOptions(input: BuildSystemPromptOption
 	return {
 		customPrompt: input.customPrompt,
 		forceSystemPrompt: input.forceSystemPrompt,
-		selectedTools: [...(input.selectedTools ?? ["read", "bash", "edit", "write", "subagent"])],
+		selectedTools: [...(input.selectedTools ?? ["read", "bash", "edit", "write"])],
 		hiddenTools: [...(input.hiddenTools ?? [])],
 		toolSnippets: { ...(input.toolSnippets ?? {}) },
 		toolGuidelines: Object.fromEntries(

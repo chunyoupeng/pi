@@ -569,8 +569,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "collapse-tool-output",
 				label: "Collapse tool output",
-				description:
-					"Hide tool output previews (except edit and write) after a turn completes and when resuming a session",
+				description: "Hide tool output previews (except edit) after a turn completes and when resuming a session",
 				currentValue: config.collapseToolOutput ? "true" : "false",
 				values: ["true", "false"],
 			},

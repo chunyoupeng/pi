@@ -299,7 +299,7 @@ export const SettingsSchema = Type.Object(
 		collapseToolOutput: Type.Optional(
 			Type.Boolean({
 				description:
-					"Hide non-destructive tool output previews (except edit and write) after a turn completes and when resuming a session.",
+					"Hide non-destructive tool output previews (except edit) after a turn completes and when resuming a session.",
 				default: SETTINGS_DEFAULTS.collapseToolOutput,
 			}),
 		),

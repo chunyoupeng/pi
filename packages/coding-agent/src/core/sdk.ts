@@ -35,8 +35,6 @@ import {
 	createPowerShellTool,
 	createReadOnlyTools,
 	createReadTool,
-	createSubagentTool,
-	createSubagentToolDefinition,
 	createWriteTool,
 	withFileMutationQueue,
 } from "./tools/index.ts";
@@ -132,15 +130,7 @@ export type {
 } from "./extensions/index.ts";
 export type { PromptTemplate } from "./prompt-templates.ts";
 export type { Skill } from "./skills.ts";
-export type {
-	SubagentExecutionStep,
-	SubagentProfile,
-	SubagentToolDetails,
-	SubagentToolInput,
-	SubagentToolOptions,
-	SubagentUsage,
-	Tool,
-} from "./tools/index.ts";
+export type { Tool } from "./tools/index.ts";
 
 export {
 	withFileMutationQueue,
@@ -155,8 +145,6 @@ export {
 	createFindTool,
 	createLsTool,
 	createPowerShellTool,
-	createSubagentTool,
-	createSubagentToolDefinition,
 };
 
 // Helper Functions

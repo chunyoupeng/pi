@@ -173,6 +173,18 @@ const APP_KEYBINDINGS = {
 		defaultKeys: "escape",
 		description: "Return to main conversation",
 	},
+	"app.swarm.close": {
+		defaultKeys: "escape",
+		description: "Close swarm board",
+	},
+	"app.swarm.switchPane": {
+		defaultKeys: "tab",
+		description: "Switch swarm board focus pane",
+	},
+	"app.swarm.stopAll": {
+		defaultKeys: "ctrl+c",
+		description: "Stop active swarm workers or clear board editor",
+	},
 } as const satisfies KeybindingDefinitions;
 
 export type AppKeybinding = keyof typeof APP_KEYBINDINGS;

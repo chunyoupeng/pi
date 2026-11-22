@@ -282,7 +282,7 @@
     },
     "collapseToolOutput": {
       "type": "boolean",
-      "description": "Hide non-destructive tool output previews (except edit and write) after a turn completes and when resuming a session.",
+      "description": "Hide non-destructive tool output previews (except edit) after a turn completes and when resuming a session.",
       "default": true
     },
     "enableInstallTelemetry": {

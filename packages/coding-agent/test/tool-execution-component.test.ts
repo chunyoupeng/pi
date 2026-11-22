@@ -638,7 +638,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(expanded).not.toContain("more lines");
 	});
 
-	test("trims trailing blank display lines from write previews", () => {
+	test("renders write calls with only the filename until expanded and trims trailing blank lines", () => {
 		const component = new ToolExecutionComponent(
 			"write",
 			"tool-7",
@@ -648,10 +648,18 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("one");
-		expect(rendered).toContain("two");
-		expect(rendered).not.toContain("two\n\n");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("Write(README.md)");
+		expect(collapsed).not.toContain("one");
+		expect(collapsed).not.toContain("two");
+		expect(collapsed).not.toContain("to expand");
+
+		component.setExpanded(true);
+		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("Write(README.md)");
+		expect(expanded).toContain("one");
+		expect(expanded).toContain("two");
+		expect(expanded).not.toContain("two\n\n");
 	});
 
 	// #9265: every argument delta re-ran the call renderer; a streamed `write` re-highlighted its whole content each time.
@@ -668,6 +676,7 @@ describe("ToolExecutionComponent parity", () => {
 		let renderRequests = 0;
 		const tui = { requestRender: () => renderRequests++ } as unknown as TUI;
 		const component = new ToolExecutionComponent("write", "tool-9", {}, {}, counted, tui, ".");
+		component.setExpanded(true);
 		const lines = Array.from({ length: 200 }, (_, index) => `const line${index} = ${index};`);
 		const callsBefore = renderCalls;
 		let content = "";
@@ -690,6 +699,7 @@ describe("ToolExecutionComponent parity", () => {
 			tui,
 			".",
 		);
+		direct.setExpanded(true);
 		expect(streamed).toBe(stripAnsi(direct.render(120).join("\n")));
 
 		// More deltas before the next frame: one more renderer run, which shows them all.
@@ -698,10 +708,10 @@ describe("ToolExecutionComponent parity", () => {
 		component.updateArgs(final);
 		const next = stripAnsi(component.render(120).join("\n"));
 		expect(renderCalls - callsBefore).toBe(2);
-		expect(next).toContain("+198 lines");
-		expect(next).toBe(
-			stripAnsi(new ToolExecutionComponent("write", "t", final, {}, write, tui, ".").render(120).join("\n")),
-		);
+		expect(next).toContain("const tail = 2;");
+		const finalDirect = new ToolExecutionComponent("write", "t", final, {}, write, tui, ".");
+		finalDirect.setExpanded(true);
+		expect(next).toBe(stripAnsi(finalDirect.render(120).join("\n")));
 		// Rendering again without new arguments does not run the renderer.
 		component.render(120);
 		expect(renderCalls - callsBefore).toBe(2);

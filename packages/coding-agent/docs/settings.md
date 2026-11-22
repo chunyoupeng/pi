@@ -39,11 +39,11 @@ See [Choose a Model](models.md) for model selection and thinking controls.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `defaultTools` | `string[]` | `read`, `bash`, `edit`, `write`, `subagent` | Tools enabled at startup. Plain names replace the defaults; `+name` adds a tool and `-name` removes one. An empty array disables all built-in tools but not extension or SDK tools. |
+| `defaultTools` | `string[]` | `read`, `bash`, `edit`, `write` | Tools enabled at startup. Plain names replace the defaults; `+name` adds a tool and `-name` removes one. An empty array disables all built-in tools but not extension or SDK tools. |
 | `codemode.mode` | `"on"` \| `"only"` | `"on"` | How the `codemode` tool presents tools while it is active. `on`: declared tools get a note on calling them from scripts appended to their description, and `codemode` lists only tools that are not declared. `only`: `codemode` lists every tool scripts can call, and active built-in and extension tools are hidden from the model, so it reaches them through `codemode`. |
 | `codemode.inlineBudget` | number | `3000` | Estimated tokens (characters / 4) the `codemode` tool's description may spend on tool declarations. Tools that do not fit are left out and found with `searchTools()`. `0` lists only namespaces. |
 
-Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, `ls`, and `subagent`. `defaultTools` can also name `codemode` and `tool_search`, which built-in extensions register inactive, and other extension tools registered inactive.
+Available built-in tools are `read`, `bash`, `powershell`, `edit`, `write`, `grep`, `find`, and `ls`. `defaultTools` can also name `codemode` and `tool_search`, which built-in extensions register inactive, and other extension tools registered inactive.
 
 A list of only `+name` and `-name` entries changes the inherited selection instead of replacing it. For example, this enables `codemode` next to the default tools:
 
@@ -58,27 +58,6 @@ This replaces `bash` with `powershell` and enables `grep`: `["-bash", "+powershe
 `/reload` enables tools newly added to `defaultTools`. It does not disable tools removed from it or re-enable unchanged tools you turned off. `--tools` with plain names, `--no-tools`, and `--no-builtin-tools` override `defaultTools`, also on reload.
 
 CLI tool options override this setting for one invocation. `--tools` with only `+name` and `-name` entries changes the resolved `defaultTools` selection instead, for example `pi --tools +codemode`. On `/reload`, these entries apply to the reloaded setting too, so a tool removed with `-name` stays removed. See [Command Line](cli.md#tools).
-
-### Subagents
-
-Disable an individual role by adding `disabled: true` to its Markdown frontmatter. For example, put this in `~/.pi/agent/agents/worker.md` (all projects) or `.pi/agents/worker.md` (this project):
-
-```markdown
----
-name: worker
-disabled: true
----
-```
-
-To disable `reviewer`, use `reviewer.md` with `name: reviewer`. If `name` is omitted, the filename supplies it. Only the YAML boolean `true` disables a role; the string `"true"` does not.
-
-Disabled roles are excluded from the available-role list and cannot be called or resumed. Other roles remain available. Profiles keep their existing precedence: built-in < user Markdown < project Markdown < SDK `customProfiles`. Filtering happens after merging, so a higher-priority profile without `disabled: true` can re-enable a role. Removing a disabling file restores the lower-priority profile; disabling every role leaves no available roles rather than falling back to built-ins.
-
-The tool re-reads profiles on each call, including resumes. Restart Pi to refresh the advertised role list after editing these files. Disabling a role does not interrupt a call that is already running.
-
-Subagent calls accept `timeout` in seconds: default 180, recommended 180-300, maximum 600. The main agent should assign one small, independently verifiable subtask per call, not an entire large task. At the deadline, the subagent interrupts work and returns a summary of completed work, verification, and what remains. Cancellation and summary have at most 30 seconds; the entire call, including authentication and summary, cannot exceed 600 seconds. A timeout above 570 therefore stops work at 570 seconds to reserve summary time.
-
-A `timed_out` result is not task completion. Reuse its `sessionId` for the next small subtask with a fresh time budget. If the summary cannot finish, the result contains recorded partial output and attempted tool calls instead. A tool that has not acknowledged cancellation keeps its session busy until it stops, preventing overlapping resumes or resets.
 
 ## Sessions and context
 
@@ -122,7 +101,7 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | `fullscreenWheelScrollLines` | `"auto"` \| number | `"auto"` | Lines per mouse-wheel event in fullscreen mode, from 1 to 100. `"auto"` moves one line per event in local macOS terminals, which already accelerate wheel and trackpad input; elsewhere, and over SSH, it speeds up fast wheel spins to at most 6 lines per event. Alt+wheel moves five times as far. |
 | `editorPaddingX` | number | `0` | Horizontal editor padding from 0 to 3 cells. |
 | `outputPad` | `0 \| 1` | `1` | Horizontal transcript padding for messages, tool output, `!` command output, and summary blocks. |
-| `collapseToolOutput` | boolean | `true` | Hide tool output previews (except `edit` and `write`) after a turn completes and when resuming a session. |
+| `collapseToolOutput` | boolean | `true` | Hide tool output previews (except `edit`) after a turn completes and when resuming a session. |
 | `autocompleteMaxVisible` | number | `5` | Visible autocomplete entries, from 3 to 20. |
 | `showHardwareCursor` | boolean | `false` | Use the terminal cursor instead of Pi's drawn cursor. Pi still positions it for input methods. |
 | `terminal.showImages` | boolean | `true` | Display inline images when supported. |

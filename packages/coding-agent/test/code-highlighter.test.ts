@@ -54,6 +54,7 @@ describe("CodeHighlighter", () => {
 	it("write highlights unchanged first lines and a complete file only once", () => {
 		const content = Array.from({ length: 60 }, (_, i) => `const v${i} = ${i};`).join("\n");
 		const row = new ToolExecutionComponent("write", "w", { path: "a.ts", content }, {}, writeRenderers, tui, "/");
+		row.setExpanded(true);
 		row.updateArgs({ path: "a.ts", content: `${content} //` });
 		row.render(80);
 		const highlight = vi.spyOn(syntaxHighlight, "highlight");
@@ -63,8 +64,10 @@ describe("CodeHighlighter", () => {
 		expect(highlight).toHaveBeenCalledTimes(1);
 
 		row.setArgsComplete();
-		row.setExpanded(true);
+		row.render(80);
 		row.setExpanded(false);
+		row.render(80);
+		row.setExpanded(true);
 		row.render(80);
 		expect(highlight).toHaveBeenCalledTimes(2);
 	});

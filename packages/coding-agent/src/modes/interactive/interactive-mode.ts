@@ -462,7 +462,7 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
-const NON_COLLAPSIBLE_PREVIEW_TOOLS = new Set(["edit", "write"]);
+const NON_COLLAPSIBLE_PREVIEW_TOOLS = new Set(["edit"]);
 
 function isDefaultReadTool(toolName: string, toolDefinition: ToolRenderers | undefined): boolean {
 	return (

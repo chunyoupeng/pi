@@ -324,7 +324,7 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		await handleEvent.call(ctx, { type: "agent_end", messages: [], willRetry: true });
 		expect(renderComponent(ctx.chatContainer)).toContain("LIVE_OUTPUT");
 
-		// Final agent_end collapses preview (including errored tools), while keeping edit and write uncollapsed.
+		// Final agent_end collapses preview (including errored tools), while keeping edit uncollapsed.
 		await handleEvent.call(ctx, {
 			type: "tool_execution_start",
 			toolCallId: "t-edit",
@@ -362,7 +362,7 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(finalOutput).toContain("Edit(src/edit.ts)");
 		expect(finalOutput).toContain("LIVE_EDIT_DIFF");
 		expect(finalOutput).toContain("Write(src/new.ts)");
-		expect(finalOutput).toContain("LIVE_WRITE_BODY");
+		expect(finalOutput).not.toContain("LIVE_WRITE_BODY");
 	});
 
 	it("keeps tools expanded across turns when globally expanded, then collapses on global collapse", async () => {
@@ -416,7 +416,7 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(renderComponent(ctx.chatContainer)).not.toContain("SECOND_EXPANDED");
 	});
 
-	it("collapses completed historical tools on resume except edit and write, and respects collapseToolOutput=false", () => {
+	it("collapses completed historical tools on resume except edit, and respects collapseToolOutput=false", () => {
 		const editCall: AssistantMessage = {
 			role: "assistant",
 			content: [
@@ -493,7 +493,8 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(collapsedOutput).not.toContain("RESUMED_OK_OUTPUT");
 		expect(collapsedOutput).not.toContain("RESUMED_ERR_OUTPUT");
 		expect(collapsedOutput).toContain("RESUMED_EDIT_DIFF");
-		expect(collapsedOutput).toContain("RESUMED_WRITE_BODY");
+		expect(collapsedOutput).toContain("Write(src/write.ts)");
+		expect(collapsedOutput).not.toContain("RESUMED_WRITE_BODY");
 
 		const previewCtx = createFakeInteractiveContext({ collapseToolOutput: false });
 		renderSessionEntries.call(previewCtx, entries);

@@ -55,5 +55,8 @@ describe("Windows keybinding defaults", () => {
 		expect(KEYBINDINGS["app.message.dequeue"].defaultKeys).toBe(windowsKeybindings ? "alt+q" : "alt+up");
 		expect(KEYBINDINGS["app.btw.cancel"].defaultKeys).toBe("ctrl+c");
 		expect(KEYBINDINGS["app.btw.close"].defaultKeys).toBe("escape");
+		expect(KEYBINDINGS["app.swarm.close"].defaultKeys).toBe("escape");
+		expect(KEYBINDINGS["app.swarm.switchPane"].defaultKeys).toBe("tab");
+		expect(KEYBINDINGS["app.swarm.stopAll"].defaultKeys).toBe("ctrl+c");
 	});
 });

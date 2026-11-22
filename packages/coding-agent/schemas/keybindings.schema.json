@@ -374,6 +374,18 @@
     "app.btw.close": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Return to main conversation"
+    },
+    "app.swarm.close": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Close swarm board"
+    },
+    "app.swarm.switchPane": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Switch swarm board focus pane"
+    },
+    "app.swarm.stopAll": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Stop active swarm workers or clear board editor"
     }
   },
   "additionalProperties": {

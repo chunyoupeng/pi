@@ -7,9 +7,7 @@
  */
 
 import type { ToolRenderers } from "../../extensions/types.ts";
-import type { SubagentToolInput } from "../../subagent/types.ts";
 import type { ToolName } from "../index.ts";
-import { renderSubagentCall, renderSubagentResult } from "../subagent-render.ts";
 import { createShellRenderers } from "./bash.ts";
 import { editRenderers } from "./edit.ts";
 import { findRenderers } from "./find.ts";
@@ -41,15 +39,6 @@ export function createAllToolRenderers(): Record<ToolName, ToolRenderers> {
 		grep: grepRenderers,
 		find: findRenderers,
 		ls: lsRenderers,
-		subagent: {
-			renderCall: (args, theme, context) =>
-				renderSubagentCall(args as SubagentToolInput, theme, {
-					...context,
-					args: context.args as SubagentToolInput,
-				}),
-			renderResult: (result, options, theme, context) =>
-				renderSubagentResult(result, options, theme, { ...context, args: context.args as SubagentToolInput }),
-		},
 	};
 }
 
