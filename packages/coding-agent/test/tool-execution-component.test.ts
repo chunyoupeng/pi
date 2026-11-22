@@ -662,6 +662,51 @@ describe("ToolExecutionComponent parity", () => {
 		expect(expanded).not.toContain("two\n\n");
 	});
 
+	test("renders write result line count under result branch and keeps errors intact", () => {
+		const cases: Array<{ content: string; expected: string }> = [
+			{ content: "", expected: "Wrote 0 lines" },
+			{ content: "only one line", expected: "Wrote 1 line" },
+			{ content: "only one line\n", expected: "Wrote 1 line" },
+			{ content: "one\ntwo\n", expected: "Wrote 2 lines" },
+			{ content: "one\r\ntwo\r\nthree", expected: "Wrote 3 lines" },
+		];
+		for (const { content, expected } of cases) {
+			const component = new ToolExecutionComponent(
+				"write",
+				"tool-write-count",
+				{ path: "README.md", content },
+				{},
+				createWriteToolDefinition(process.cwd()),
+				createFakeTui(),
+				process.cwd(),
+			);
+			// Before completion, no result line is shown.
+			expect(stripAnsi(component.render(120).join("\n"))).not.toContain("Wrote");
+
+			component.updateResult({
+				content: [{ type: "text", text: "Successfully wrote to README.md" }],
+				isError: false,
+			});
+			const rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("Write(README.md)");
+			expect(rendered).toContain(`  └─ ${expected}`);
+		}
+
+		const errored = new ToolExecutionComponent(
+			"write",
+			"tool-write-err",
+			{ path: "README.md", content: "one\ntwo\n" },
+			{},
+			createWriteToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		errored.updateResult({ content: [{ type: "text", text: "EACCES: permission denied" }], isError: true });
+		const errRendered = stripAnsi(errored.render(120).join("\n"));
+		expect(errRendered).toContain("  └─ EACCES: permission denied");
+		expect(errRendered).not.toContain("Wrote");
+	});
+
 	// #9265: every argument delta re-ran the call renderer; a streamed `write` re-highlighted its whole content each time.
 	test("renders streamed partial arguments once per frame, with the latest arguments", () => {
 		const write = createWriteToolDefinition(process.cwd());

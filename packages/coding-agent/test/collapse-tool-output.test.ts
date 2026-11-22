@@ -362,6 +362,7 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(finalOutput).toContain("Edit(src/edit.ts)");
 		expect(finalOutput).toContain("LIVE_EDIT_DIFF");
 		expect(finalOutput).toContain("Write(src/new.ts)");
+		expect(finalOutput).toContain("└─ Wrote 1 line");
 		expect(finalOutput).not.toContain("LIVE_WRITE_BODY");
 	});
 
@@ -494,6 +495,7 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(collapsedOutput).not.toContain("RESUMED_ERR_OUTPUT");
 		expect(collapsedOutput).toContain("RESUMED_EDIT_DIFF");
 		expect(collapsedOutput).toContain("Write(src/write.ts)");
+		expect(collapsedOutput).toContain("└─ Wrote 1 line");
 		expect(collapsedOutput).not.toContain("RESUMED_WRITE_BODY");
 
 		const previewCtx = createFakeInteractiveContext({ collapseToolOutput: false });

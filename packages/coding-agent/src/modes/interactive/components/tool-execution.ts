@@ -52,7 +52,7 @@ const STATUS_BULLET = "⏺";
 /** Foreground colors cycled by the bullet while the tool is executing, giving the fixed dot a pulse. */
 const RUNNING_BULLET_FRAMES = ["border", "dim"] as const;
 const RUNNING_BULLET_INTERVAL_MS = 500;
-const RESULT_BRANCH = "⎿";
+const RESULT_BRANCH = "└─";
 const CALL_GUTTER_WIDTH = 2;
 const RESULT_GUTTER_WIDTH = 5;
 

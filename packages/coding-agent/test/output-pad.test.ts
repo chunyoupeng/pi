@@ -89,7 +89,7 @@ describe("outputPad", () => {
 		const lines = renderLines(component);
 		// The fork keeps tool gutters independently of the configurable content padding.
 		if (name === "tool execution") {
-			expect(lines).toEqual(["⏺ custom_tool", "  ⎿  ok"]);
+			expect(lines).toEqual(["⏺ custom_tool", "  └─ ok"]);
 		} else if (name === "self-rendered edit result") {
 			expect(lines).toEqual(["⏺ Edit(file.txt)", "  Could not find old text"]);
 		} else {

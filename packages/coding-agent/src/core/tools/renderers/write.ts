@@ -8,7 +8,7 @@ import { formatCollapsedOutput } from "../render-utils.ts";
  * definition, so the tool's public shape is unchanged.
  */
 
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import {
 	CodeHighlighter,
 	getLanguageFromPath,
@@ -141,21 +141,32 @@ function formatWriteCall(
 
 	return text;
 }
+function countContentLines(content: string): number {
+	if (content.length === 0) return 0;
+	let count = 1;
+	for (let i = 0; i < content.length - 1; i++) {
+		if (content.charCodeAt(i) === 10) count++;
+	}
+	return count;
+}
 function formatWriteResult(
+	args: { content?: unknown } | undefined,
 	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean },
+	options: ToolRenderResultOptions,
 	theme: Theme,
 ): string | undefined {
-	if (!result.isError) {
+	if (result.isError) {
+		const output = result.content
+			.filter((c) => c.type === "text")
+			.map((c) => c.text || "")
+			.join("\n");
+		return output ? `\n${theme.fg("error", output)}` : undefined;
+	}
+	if (options.isPartial || typeof args?.content !== "string") {
 		return undefined;
 	}
-	const output = result.content
-		.filter((c) => c.type === "text")
-		.map((c) => c.text || "")
-		.join("\n");
-	if (!output) {
-		return undefined;
-	}
-	return `\n${theme.fg("error", output)}`;
+	const lineCount = countContentLines(args.content);
+	return theme.fg("muted", `Wrote ${lineCount} ${lineCount === 1 ? "line" : "lines"}`);
 }
 
 export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
@@ -182,15 +193,15 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		);
 		return component;
 	},
-	renderResult(result, _options, theme, context) {
-		const output = formatWriteResult({ ...result, isError: context.isError }, theme);
-		if (!output) {
-			const component = (context.lastComponent as Container | undefined) ?? new Container();
-			component.clear();
-			return component;
-		}
-		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-		text.setText(output);
+	renderResult(result, options, theme, context) {
+		const output = formatWriteResult(
+			context.args as { content?: unknown } | undefined,
+			{ ...result, isError: context.isError },
+			options,
+			theme,
+		);
+		const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+		text.setText(output ?? "");
 		return text;
 	},
 };
