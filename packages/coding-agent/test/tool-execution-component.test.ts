@@ -424,7 +424,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
 		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered.match(/\bRead\b/g)?.length ?? 0).toBe(1);
+		expect(rendered.match(/Read(?: docs)?\(README\.md\)/g)?.length ?? 0).toBe(1);
 	});
 
 	// Issue #9996: strict tool schemas make models send null for omitted optional fields.
@@ -837,7 +837,78 @@ describe("ToolExecutionComponent parity", () => {
 		expect(stripAnsi(component.render(width).join("\n"))).toContain("hidden content");
 	});
 
-	test("collapses ordinary read results to a short preview until expanded", () => {
+	test("renders read result line count under result branch until expanded", () => {
+		const cases: Array<{ text: string; expected: string }> = [
+			{ text: "", expected: "Read 0 lines" },
+			{ text: "only one line", expected: "Read 1 line" },
+			{ text: "only one line\n", expected: "Read 1 line" },
+			{ text: "one\ntwo\n", expected: "Read 2 lines" },
+			{ text: "one\r\ntwo\r\nthree", expected: "Read 3 lines" },
+			{
+				text: "one\ntwo\n\n[10 more lines in file. Use offset=3 to continue.]",
+				expected: "Read 2 lines",
+			},
+		];
+		for (const { text, expected } of cases) {
+			const component = new ToolExecutionComponent(
+				"read",
+				"tool-read-count",
+				{ path: "notes.txt" },
+				{},
+				createReadToolDefinition(process.cwd()),
+				createFakeTui(),
+				process.cwd(),
+			);
+			expect(stripAnsi(component.render(120).join("\n"))).not.toContain("└─");
+
+			component.updateResult({ content: [{ type: "text", text }], details: undefined, isError: false }, false);
+			const collapsed = stripAnsi(component.render(120).join("\n"));
+			expect(collapsed).toContain("Read(notes.txt)");
+			expect(collapsed).toContain(`  └─ ${expected}`);
+			if (text) {
+				expect(collapsed).not.toContain("only one line");
+			}
+		}
+
+		// Truncated read uses details.truncation.outputLines and keeps the truncation warning.
+		const truncated = new ToolExecutionComponent(
+			"read",
+			"tool-read-truncated",
+			{ path: "big.txt" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		truncated.updateResult(
+			{
+				content: [{ type: "text", text: "line-1\nline-2\n\n[Showing lines 1-2 of 10. Use offset=3 to continue.]" }],
+				details: {
+					truncation: {
+						content: "line-1\nline-2",
+						truncated: true,
+						truncatedBy: "lines",
+						totalLines: 10,
+						totalBytes: 100,
+						outputLines: 2,
+						outputBytes: 13,
+						lastLinePartial: false,
+						firstLineExceedsLimit: false,
+						maxLines: 2,
+						maxBytes: 50 * 1024,
+					},
+				},
+				isError: false,
+			},
+			false,
+		);
+		const truncatedCollapsed = stripAnsi(truncated.render(120).join("\n"));
+		expect(truncatedCollapsed).toContain("Read(big.txt)");
+		expect(truncatedCollapsed).toContain("  └─ Read 2 lines");
+		expect(truncatedCollapsed).toContain("[Truncated: showing 2 of 10 lines (2 line limit)]");
+		expect(truncatedCollapsed).not.toContain("line-1");
+
+		// Expanding reveals the full file contents.
 		const lines = Array.from({ length: 8 }, (_, i) => `line-${i + 1}`);
 		const component = new ToolExecutionComponent(
 			"read",
@@ -854,16 +925,15 @@ describe("ToolExecutionComponent parity", () => {
 		);
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
-		expect(collapsed).toContain("Read(");
-		expect(collapsed).toContain("notes.txt");
-		expect(collapsed).toContain("line-1");
-		expect(collapsed).toContain("line-3");
-		expect(collapsed).toContain("… +5 lines");
-		expect(collapsed).not.toContain("line-4");
+		expect(collapsed).toContain("Read(notes.txt)");
+		expect(collapsed).toContain("  └─ Read 8 lines");
+		expect(collapsed).not.toContain("line-1");
 
 		component.setExpanded(true);
 		const expanded = stripAnsi(component.render(120).join("\n"));
+		expect(expanded).toContain("line-1");
 		expect(expanded).toContain("line-8");
+		expect(expanded).not.toContain("Read 8 lines");
 	});
 
 	for (const scenario of [

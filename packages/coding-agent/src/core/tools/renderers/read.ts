@@ -19,7 +19,14 @@ import { formatPathRelativeToCwdOrAbsolute } from "../../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import { resolveToCwd } from "../path-utils.ts";
 import type { ReadToolDetails } from "../read.ts";
-import { formatReadLineRange, getTextOutput, renderToolPath, replaceTabs, str } from "../render-utils.ts";
+import {
+	countContentLines,
+	formatReadLineRange,
+	getTextOutput,
+	renderToolPath,
+	replaceTabs,
+	str,
+} from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "../truncate.ts";
 
 interface CompactReadClassification {
@@ -27,8 +34,10 @@ interface CompactReadClassification {
 	label: string;
 }
 const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
-export type ReadRenderArgs = { path?: string; file_path?: string; offset?: unknown; limit?: unknown };
-export function styledReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
+const READ_CONTINUATION_NOTICE_RE =
+	/\n\n(?:\[\d+ more lines in file\. Use offset=\d+ to continue\.?\]|\[Showing lines \d+-\d+ of \d+(?: \([^)]+ limit\))?\. Use offset=\d+ to continue\.?\])$/;
+type ReadRenderArgs = { path?: string; file_path?: string; offset?: unknown; limit?: unknown };
+function styledReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
 	const range = formatReadLineRange(args?.offset, args?.limit);
 	return range ? theme.fg("warning", range) : "";
 }
@@ -110,7 +119,21 @@ function formatCompactReadCall(
 		expandHint
 	);
 }
-export function formatReadResult(
+function countReadLines(result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails }): number {
+	const truncation = result.details?.truncation;
+	if (truncation) {
+		return truncation.outputLines;
+	}
+	const rawText = result.content
+		.filter((c): c is TextContent => c.type === "text")
+		.map((c) => c.text)
+		.join("\n")
+		.replace(/\r\n/g, "\n")
+		.replace(/\r/g, "\n")
+		.replace(READ_CONTINUATION_NOTICE_RE, "");
+	return countContentLines(rawText);
+}
+function formatReadResult(
 	args: ReadRenderArgs | undefined,
 	result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
 	options: ToolRenderResultOptions,
@@ -125,39 +148,50 @@ export function formatReadResult(
 		? `\n${theme.fg("warning", `[${unsupportedBy} does not support images; it saw a placeholder instead]`)}`
 		: "";
 
-	const rawPath = str(args?.file_path ?? args?.path);
-	const output = getTextOutput(result, showImages);
-	const lang = !isError && rawPath ? getLanguageFromPath(rawPath) : undefined;
-	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
-	const lines = trimTrailingEmptyLines(renderedLines);
-	const totalLines = lines.length;
-	const styleLine = isError
-		? (line: string) => theme.fg("error", replaceTabs(line))
-		: lang
-			? (line: string) => replaceTabs(line)
-			: (line: string) => theme.fg("toolOutput", replaceTabs(line));
-
-	let text = "";
 	if (isError) {
-		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
+		const output = getTextOutput(result, showImages);
+		const lines = trimTrailingEmptyLines(output.split("\n"));
+		return `\n${formatCollapsedOutput(lines.join("\n"), theme, {
 			expanded: options.expanded,
 			maxLines: TOOL_PREVIEW_LINES,
-			styleLine,
+			styleLine: (line) => theme.fg("error", replaceTabs(line)),
 			width,
 		})}`;
-	} else if (options.expanded) {
+	}
+
+	if (options.isPartial) {
+		return "";
+	}
+
+	let text = "";
+	if (options.expanded) {
+		const rawPath = str(args?.file_path ?? args?.path);
+		const output = getTextOutput(result, showImages);
+		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+		const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
+		const lines = trimTrailingEmptyLines(renderedLines);
+		const styleLine = lang
+			? (line: string) => replaceTabs(line)
+			: (line: string) => theme.fg("toolOutput", replaceTabs(line));
 		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
 			expanded: true,
 			styleLine,
 			width,
 		})}`;
-	} else if (totalLines > 0) {
-		text = `\n${formatCollapsedOutput(lines.join("\n"), theme, {
-			expanded: false,
-			maxLines: TOOL_PREVIEW_LINES,
-			styleLine,
-			width,
-		})}`;
+	} else if (result.content.some((c) => c.type === "image")) {
+		const output = getTextOutput(result, showImages);
+		const lines = trimTrailingEmptyLines(output.split("\n"));
+		if (lines.length > 0) {
+			text = formatCollapsedOutput(lines.join("\n"), theme, {
+				expanded: false,
+				maxLines: TOOL_PREVIEW_LINES,
+				styleLine: (line) => theme.fg("muted", replaceTabs(line)),
+				width,
+			});
+		}
+	} else {
+		const lineCount = countReadLines(result);
+		text = theme.fg("muted", `Read ${lineCount} ${lineCount === 1 ? "line" : "lines"}`);
 	}
 
 	const truncation = result.details?.truncation;

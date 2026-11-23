@@ -7,7 +7,6 @@ import goalExtension from "./goal/index.ts";
 import llamaExtension from "./llama/index.ts";
 import mcpExtension from "./mcp/index.ts";
 import memoryExtension from "./memory/index.ts";
-import swarmExtension from "./swarm/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
@@ -16,7 +15,6 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "goal", factory: goalExtension, builtin: true },
 	{ name: "memory", factory: memoryExtension, replaceable: true, builtin: true },
 	{ name: "bg-task", factory: bgTaskExtension, replaceable: true, builtin: true },
-	{ name: "swarm", factory: swarmExtension, replaceable: true, builtin: true },
 	{ name: "llama.cpp", factory: llamaExtension, builtin: true },
 	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
 	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },

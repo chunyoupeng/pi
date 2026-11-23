@@ -54,10 +54,11 @@ describe("ToolExecutionComponent preview collapsing", () => {
 		);
 		readTool.updateResult({ content: [{ type: "text", text: "READ_BODY_LINE" }], isError: false });
 		expect(renderComponent(readTool)).toContain("Read(src/app.ts)");
-		expect(renderComponent(readTool)).toContain("READ_BODY_LINE");
+		expect(renderComponent(readTool)).toContain("└─ Read 1 line");
+		expect(renderComponent(readTool)).not.toContain("READ_BODY_LINE");
 		readTool.setPreviewCollapsed(true);
 		expect(renderComponent(readTool)).toContain("Read(src/app.ts)");
-		expect(renderComponent(readTool)).not.toContain("READ_BODY_LINE");
+		expect(renderComponent(readTool)).not.toContain("Read 1 line");
 
 		const bashTool = new ToolExecutionComponent(
 			"bash",
@@ -354,6 +355,32 @@ describe("InteractiveMode auto-collapse tool output", () => {
 			result: { content: [{ type: "text", text: "Wrote" }], details: undefined },
 			isError: false,
 		});
+		await handleEvent.call(ctx, {
+			type: "tool_execution_start",
+			toolCallId: "t-read-1",
+			toolName: "read",
+			args: { path: "src/a.ts" },
+		});
+		await handleEvent.call(ctx, {
+			type: "tool_execution_end",
+			toolCallId: "t-read-1",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "LIVE_READ_A_1\nLIVE_READ_A_2" }], details: undefined },
+			isError: false,
+		});
+		await handleEvent.call(ctx, {
+			type: "tool_execution_start",
+			toolCallId: "t-read-2",
+			toolName: "read",
+			args: { path: "src/b.ts" },
+		});
+		await handleEvent.call(ctx, {
+			type: "tool_execution_end",
+			toolCallId: "t-read-2",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "LIVE_READ_B_1" }], details: undefined },
+			isError: false,
+		});
 
 		await handleEvent.call(ctx, { type: "agent_end", messages: [], willRetry: false });
 		const finalOutput = renderComponent(ctx.chatContainer);
@@ -364,6 +391,13 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(finalOutput).toContain("Write(src/new.ts)");
 		expect(finalOutput).toContain("└─ Wrote 1 line");
 		expect(finalOutput).not.toContain("LIVE_WRITE_BODY");
+		expect(finalOutput).toContain("Read(src/a.ts)");
+		expect(finalOutput).toContain("└─ Read 2 lines");
+		expect(finalOutput).toContain("Read(src/b.ts)");
+		expect(finalOutput).toContain("└─ Read 1 line");
+		expect(finalOutput).not.toContain("Read 2 files");
+		expect(finalOutput).not.toContain("LIVE_READ_A_1");
+		expect(finalOutput).not.toContain("LIVE_READ_B_1");
 	});
 
 	it("keeps tools expanded across turns when globally expanded, then collapses on global collapse", async () => {
@@ -469,6 +503,31 @@ describe("InteractiveMode auto-collapse tool output", () => {
 			isError: false,
 			timestamp: Date.now(),
 		};
+		const readCall: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "h-read",
+					name: "read",
+					arguments: { path: "src/read.ts" },
+				},
+			],
+			api: "test-api",
+			provider: "test-provider",
+			model: "test-model",
+			usage: EMPTY_USAGE,
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const readResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "h-read",
+			toolName: "read",
+			content: [{ type: "text", text: "RESUMED_READ_1\nRESUMED_READ_2" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
 		const entries = createEntries([
 			createAssistantToolCall("h1"),
 			createToolResult("h1", "RESUMED_OK_OUTPUT", false),
@@ -479,6 +538,8 @@ describe("InteractiveMode auto-collapse tool output", () => {
 			editResult,
 			writeCall,
 			writeResult,
+			readCall,
+			readResult,
 		]);
 
 		const renderSessionEntries = (
@@ -497,6 +558,9 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(collapsedOutput).toContain("Write(src/write.ts)");
 		expect(collapsedOutput).toContain("└─ Wrote 1 line");
 		expect(collapsedOutput).not.toContain("RESUMED_WRITE_BODY");
+		expect(collapsedOutput).toContain("Read(src/read.ts)");
+		expect(collapsedOutput).toContain("└─ Read 2 lines");
+		expect(collapsedOutput).not.toContain("RESUMED_READ_1");
 
 		const previewCtx = createFakeInteractiveContext({ collapseToolOutput: false });
 		renderSessionEntries.call(previewCtx, entries);

@@ -16,7 +16,7 @@ import {
 	type Theme,
 } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
-import { normalizeDisplayText, renderToolPath, replaceTabs, str } from "../render-utils.ts";
+import { countContentLines, normalizeDisplayText, renderToolPath, replaceTabs, str } from "../render-utils.ts";
 
 type WriteHighlightCache = {
 	rawPath: string | null;
@@ -140,14 +140,6 @@ function formatWriteCall(
 	}
 
 	return text;
-}
-function countContentLines(content: string): number {
-	if (content.length === 0) return 0;
-	let count = 1;
-	for (let i = 0; i < content.length - 1; i++) {
-		if (content.charCodeAt(i) === 10) count++;
-	}
-	return count;
 }
 function formatWriteResult(
 	args: { content?: unknown } | undefined,

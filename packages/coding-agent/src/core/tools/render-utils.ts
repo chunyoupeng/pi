@@ -52,6 +52,15 @@ export function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
 }
 
+export function countContentLines(content: string): number {
+	if (content.length === 0) return 0;
+	let count = 1;
+	for (let i = 0; i < content.length - 1; i++) {
+		if (content.charCodeAt(i) === 10) count++;
+	}
+	return count;
+}
+
 export function getTextOutput(
 	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> } | undefined,
 	showImages: boolean,
