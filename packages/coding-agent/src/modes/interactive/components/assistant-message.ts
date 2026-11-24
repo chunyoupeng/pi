@@ -455,11 +455,8 @@ export class AssistantMessageComponent extends Container {
 	}
 }
 
-/** Estimate output tokens from streamed assistant content (chars/4 heuristic). */
-export function estimateAssistantOutputTokens(message: AssistantMessage): number {
-	if (message.usage?.output && message.usage.output > 0) {
-		return message.usage.output;
-	}
+/** Estimate tokens from streamed assistant content blocks (chars/4 heuristic). */
+export function estimateAssistantContentTokens(message: AssistantMessage): number {
 	let chars = 0;
 	for (const block of message.content) {
 		if (block.type === "text") {
@@ -471,4 +468,12 @@ export function estimateAssistantOutputTokens(message: AssistantMessage): number
 		}
 	}
 	return Math.ceil(chars / 4);
+}
+
+/** Estimate output tokens from streamed assistant content (chars/4 heuristic). */
+export function estimateAssistantOutputTokens(message: AssistantMessage): number {
+	if (message.usage?.output && message.usage.output > 0) {
+		return message.usage.output;
+	}
+	return estimateAssistantContentTokens(message);
 }

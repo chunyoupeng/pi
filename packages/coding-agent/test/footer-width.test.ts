@@ -26,6 +26,7 @@ function createSession(options: {
 	toolUsage?: AssistantUsage;
 	usingSubscription?: boolean;
 	routedModel?: { model: { id: string }; thinkingLevel?: string };
+	contextUsage?: { tokens?: number | null; contextWindow: number; percent: number | null };
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -82,7 +83,7 @@ function createSession(options: {
 			getSessionName: () => options.sessionName,
 			getCwd: () => "/tmp/project",
 		},
-		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
+		getContextUsage: () => options.contextUsage ?? { contextWindow: 200_000, percent: 12.3 },
 		routedModel: options.routedModel,
 		modelRuntime: {
 			isUsingSubscription: () => options.usingSubscription ?? false,
@@ -317,5 +318,45 @@ describe("FooterComponent layout", () => {
 
 		footer.setAutoCompactEnabled(false);
 		expect(stripAnsi(footer.render(120).join(" "))).toContain("12.3% · 200k · no-auto");
+	});
+
+	it("updates context percentage live during generation from reported context and streamed output", () => {
+		const session = createSession({
+			sessionName: "",
+			usage,
+			contextUsage: { tokens: 24_600, contextWindow: 200_000, percent: 12.3 },
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+		expect(stripAnsi(footer.render(120).join(" "))).toContain("12.3% · 200k");
+
+		// Before the provider reports updated context usage, streamed output tokens advance the estimate.
+		footer.setLiveOutputTokens(5_400);
+		expect(stripAnsi(footer.render(120).join(" "))).toContain("15.0% · 200k");
+
+		// Once the provider reports live context tokens (e.g. ACP usage_update or Anthropic message_start), use it.
+		footer.setLiveContextTokens(90_000);
+		expect(stripAnsi(footer.render(120).join(" "))).toContain("45.0% · 200k");
+
+		// Clearing live counters at turn end restores persisted session usage.
+		footer.setLiveOutputTokens(0);
+		footer.setLiveContextTokens(undefined);
+		expect(stripAnsi(footer.render(120).join(" "))).toContain("12.3% · 200k");
+	});
+
+	it("keeps unknown post-compaction context until live reported context arrives", () => {
+		const session = createSession({
+			sessionName: "",
+			contextUsage: { tokens: null, contextWindow: 200_000, percent: null },
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+		expect(stripAnsi(footer.render(120).join(" "))).toContain("? · 200k");
+
+		// Output tokens alone cannot resolve unknown post-compaction prompt size.
+		footer.setLiveOutputTokens(1_000);
+		expect(stripAnsi(footer.render(120).join(" "))).toContain("? · 200k");
+
+		// Reported live context tokens replace '?' immediately mid-turn.
+		footer.setLiveContextTokens(50_000);
+		expect(stripAnsi(footer.render(120).join(" "))).toContain("25.0% · 200k");
 	});
 });

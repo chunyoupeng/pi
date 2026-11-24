@@ -65,6 +65,8 @@ export class FooterComponent implements Component {
 	private footerData: ReadonlyFooterDataProvider;
 	/** Live output tokens from the in-flight assistant turn (not yet persisted). */
 	private liveOutputTokens = 0;
+	/** Live context tokens reported by the in-flight assistant turn (undefined when not yet reported). */
+	private liveContextTokens: number | undefined = undefined;
 	private sessionStats?: SessionStats;
 
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
@@ -83,6 +85,11 @@ export class FooterComponent implements Component {
 	/** Set live output tokens for the current streaming turn (0 when idle). */
 	setLiveOutputTokens(tokens: number): void {
 		this.liveOutputTokens = Math.max(0, Math.floor(tokens));
+	}
+
+	/** Set live context tokens for the current streaming turn (undefined when idle or not yet reported). */
+	setLiveContextTokens(tokens: number | undefined): void {
+		this.liveContextTokens = tokens !== undefined && tokens > 0 ? Math.floor(tokens) : undefined;
 	}
 
 	/**
@@ -165,8 +172,17 @@ export class FooterComponent implements Component {
 		const state = this.session.state;
 		const { usageTotals, latestCacheHitRate, contextUsage } = this.getSessionStats();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
-		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercentKnown = contextUsage?.percent !== null;
+		let contextPercentValue = contextUsage?.percent ?? 0;
+		let contextPercentKnown = contextUsage?.percent !== null && contextUsage?.percent !== undefined;
+		if (contextWindow > 0) {
+			if (this.liveContextTokens !== undefined) {
+				contextPercentValue = (this.liveContextTokens / contextWindow) * 100;
+				contextPercentKnown = true;
+			} else if (this.liveOutputTokens > 0 && typeof contextUsage?.tokens === "number") {
+				contextPercentValue = ((contextUsage.tokens + this.liveOutputTokens) / contextWindow) * 100;
+				contextPercentKnown = true;
+			}
+		}
 		const sep = theme.fg("dim", "  ·  ");
 
 		// Location: cwd, git branch, session name

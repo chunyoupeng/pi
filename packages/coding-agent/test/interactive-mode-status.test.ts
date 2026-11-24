@@ -7,8 +7,10 @@ import type { AutocompleteProviderFactory } from "../src/core/extensions/types.t
 import type { QuietStartup } from "../src/core/settings-manager.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
+import { WorkingStatusIndicator } from "../src/modes/interactive/components/status-indicator.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { stripAnsi } from "../src/utils/ansi.ts";
 
 function renderLastLine(container: Container, width = 120): string {
 	const last = container.children[container.children.length - 1];
@@ -1120,6 +1122,359 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 			expect(statuses[0]).toMatch(/· 2s · 2s · 10\.0 tok\/s$/);
 		} finally {
 			vi.useRealTimers();
+		}
+	});
+});
+
+describe("InteractiveMode thinking status and live footer context", () => {
+	function makeAssistantMessage(
+		content: Array<{ type: "text"; text: string } | { type: "thinking"; thinking: string }>,
+		usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number },
+	) {
+		return {
+			role: "assistant" as const,
+			content,
+			api: "antigravity-acp",
+			provider: "antigravity-acp",
+			model: "gemini-4-neon",
+			usage: {
+				...usage,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop" as const,
+			timestamp: Date.now(),
+		};
+	}
+
+	function createStreamingHarness(thinkingLevel: "off" | "low" | "medium" | "high" | "xhigh", reasoning = true) {
+		const tui = { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } } as unknown as TUI;
+		const indicator = new WorkingStatusIndicator(tui, "Pondering");
+		const footer = {
+			invalidate: vi.fn(),
+			setLiveOutputTokens: vi.fn(),
+			setLiveContextTokens: vi.fn(),
+		};
+		const fakeThis: Record<string, unknown> = {
+			isInitialized: true,
+			session: { thinkingLevel, isStreaming: true, routedModel: undefined, model: { reasoning } },
+			footer,
+			programStatus: { handleEvent: vi.fn() },
+			pendingTools: new Map(),
+			turnTools: new Set(),
+			addToolOutputDividerBeforeNextAssistant: false,
+			defaultEditor: { onEscape: undefined },
+			retryEscapeHandler: undefined,
+			chatContainer: new Container(),
+			ui: tui,
+			settingsManager: {
+				getShowTerminalProgress: () => false,
+				getCollapseToolOutput: () => false,
+			},
+			toolOutputExpanded: false,
+			hideThinkingBlock: false,
+			hiddenThinkingLabel: "Thinking...",
+			outputPad: 1,
+			activeStatusIndicator: indicator,
+			workingMessage: undefined,
+			workingVisible: true,
+			defaultWorkingMessage: "Pondering",
+			isAssistantThinking: false,
+			getMarkdownThemeWithSettings: () => ({}),
+			getMarkdownTransformers: () => [],
+			getWorkingDetail: (InteractiveMode as any).prototype.getWorkingDetail,
+			updateLiveOutputTokens: (InteractiveMode as any).prototype.updateLiveOutputTokens,
+			updateWorkingOutputTokenLabel: (InteractiveMode as any).prototype.updateWorkingOutputTokenLabel,
+			clearLiveOutputTokens: (InteractiveMode as any).prototype.clearLiveOutputTokens,
+			clearStatusIndicator: vi.fn(),
+			hasVisibleAssistantText: () => true,
+			addToolOutputDividerBefore: vi.fn(),
+			maybeShowThinkingDropNotice: vi.fn(),
+			maybeShowCacheMissNotice: vi.fn(),
+			showStatus: vi.fn(),
+			agentStartedAt: undefined,
+			agentFirstTokenAt: undefined,
+			assistantFirstTokenAt: undefined,
+			completedAgentGenerationMs: 0,
+			completedAgentOutputTokens: 0,
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			isFirstOutputTokenEvent: (InteractiveMode as any).prototype.isFirstOutputTokenEvent,
+		};
+		const handleEvent = (event: unknown) => (InteractiveMode as any).prototype.handleEvent.call(fakeThis, event);
+		return { fakeThis, indicator, footer, handleEvent };
+	}
+
+	test.each([
+		["low", "still thinking with low effort"],
+		["medium", "still thinking with medium effort"],
+		["high", "still thinking with high effort"],
+		["xhigh", "still thinking with xhigh effort"],
+	] as const)(
+		"keeps default working message in front and appends '%s' thinking effort suffix only while thinking tokens stream",
+		async (level, expectedDetail) => {
+			initTheme("dark");
+			const { fakeThis, indicator, handleEvent } = createStreamingHarness(level, true);
+			try {
+				const initial = makeAssistantMessage([], {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+				});
+				await handleEvent({ type: "agent_start" });
+				fakeThis.defaultWorkingMessage = "Pondering";
+				await handleEvent({ type: "turn_start" });
+				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+				await handleEvent({ type: "message_start", message: initial });
+				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+				// Bare thinking_start and empty usage-sync deltas before any token must keep the suffix absent.
+				await handleEvent({
+					type: "message_update",
+					message: initial,
+					assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: initial },
+				});
+				await handleEvent({
+					type: "message_update",
+					message: initial,
+					assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "", partial: initial },
+				});
+				await handleEvent({
+					type: "message_update",
+					message: initial,
+					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "", partial: initial },
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+				// First real thinking token keeps "Pondering" in front and appends " · still thinking with <level> effort".
+				const firstThinkingMsg = makeAssistantMessage([{ type: "thinking", thinking: "plan" }], {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+				});
+				await handleEvent({
+					type: "message_update",
+					message: firstThinkingMsg,
+					assistantMessageEvent: {
+						type: "thinking_delta",
+						contentIndex: 0,
+						delta: "plan",
+						partial: firstThinkingMsg,
+					},
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toMatch(
+					new RegExp(`Pondering \\([^)]+ · ${expectedDetail}\\)`),
+				);
+
+				// Empty text delta (usage sync) keeps thinking detail active once thinking started.
+				await handleEvent({
+					type: "message_update",
+					message: firstThinkingMsg,
+					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "", partial: firstThinkingMsg },
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toMatch(
+					new RegExp(`Pondering \\([^)]+ · ${expectedDetail}\\)`),
+				);
+
+				// Text output removes the thinking detail while keeping the front working message.
+				const textMsg = makeAssistantMessage([{ type: "text", text: "Answer" }], {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+				});
+				await handleEvent({
+					type: "message_update",
+					message: textMsg,
+					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Answer", partial: textMsg },
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+				// Explicit thinking delta later in the turn re-activates the thinking suffix.
+				const thinkingMsg = makeAssistantMessage([{ type: "thinking", thinking: "more" }], {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+				});
+				await handleEvent({
+					type: "message_update",
+					message: thinkingMsg,
+					assistantMessageEvent: {
+						type: "thinking_delta",
+						contentIndex: 0,
+						delta: "more",
+						partial: thinkingMsg,
+					},
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toMatch(
+					new RegExp(`Pondering \\([^)]+ · ${expectedDetail}\\)`),
+				);
+
+				// Tool calls and thinking_end immediately drop the thinking suffix while keeping the front label.
+				await handleEvent({
+					type: "message_update",
+					message: thinkingMsg,
+					assistantMessageEvent: {
+						type: "thinking_end",
+						contentIndex: 0,
+						content: "more",
+						partial: thinkingMsg,
+					},
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+				await handleEvent({
+					type: "message_update",
+					message: thinkingMsg,
+					assistantMessageEvent: {
+						type: "thinking_delta",
+						contentIndex: 0,
+						delta: "again",
+						partial: thinkingMsg,
+					},
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toMatch(
+					new RegExp(`Pondering \\([^)]+ · ${expectedDetail}\\)`),
+				);
+
+				await handleEvent({
+					type: "message_update",
+					message: thinkingMsg,
+					assistantMessageEvent: {
+						type: "toolcall_start",
+						contentIndex: 1,
+						partial: thinkingMsg,
+					},
+				});
+				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+				// Starting a subsequent turn waits for the next first token without the thinking suffix.
+				await handleEvent({ type: "turn_start" });
+				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+			} finally {
+				indicator.dispose();
+			}
+		},
+	);
+
+	test("keeps default working message when thinking is off unless real thinking tokens stream", async () => {
+		initTheme("dark");
+		const { fakeThis, indicator, handleEvent } = createStreamingHarness("off", true);
+		try {
+			const initial = makeAssistantMessage([], {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+			});
+			await handleEvent({ type: "agent_start" });
+			fakeThis.defaultWorkingMessage = "Pondering";
+			await handleEvent({ type: "turn_start" });
+			await handleEvent({ type: "message_start", message: initial });
+			expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
+			expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+			// Empty usage-sync thinking delta must not trigger thinking suffix.
+			await handleEvent({
+				type: "message_update",
+				message: initial,
+				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "", partial: initial },
+			});
+			expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+
+			// Real thinking delta appends generic " · still thinking" while keeping "Pondering" in front.
+			const thinkingMsg = makeAssistantMessage([{ type: "thinking", thinking: "analyzing" }], {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+			});
+			await handleEvent({
+				type: "message_update",
+				message: thinkingMsg,
+				assistantMessageEvent: {
+					type: "thinking_delta",
+					contentIndex: 0,
+					delta: "analyzing",
+					partial: thinkingMsg,
+				},
+			});
+			expect(stripAnsi(indicator.render(120).join("\n"))).toMatch(/Pondering \([^)]+ · still thinking\)/);
+		} finally {
+			indicator.dispose();
+		}
+	});
+
+	test("pushes live context tokens to the footer across streaming updates and clears them on end", async () => {
+		initTheme("dark");
+		const { indicator, footer, handleEvent } = createStreamingHarness("high");
+		try {
+			const startMsg = makeAssistantMessage([], {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+			});
+			await handleEvent({ type: "agent_start" });
+			await handleEvent({ type: "message_start", message: startMsg });
+			expect(footer.setLiveContextTokens).toHaveBeenLastCalledWith(undefined);
+
+			// Multi-step ACP usage update: totalTokens is the live context window fill, output is cumulative.
+			const step1 = makeAssistantMessage([{ type: "thinking", thinking: "plan" }], {
+				input: 10_000,
+				output: 1_200,
+				cacheRead: 40_000,
+				cacheWrite: 0,
+				totalTokens: 50_500,
+			});
+			await handleEvent({
+				type: "message_update",
+				message: step1,
+				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "", partial: step1 },
+			});
+			expect(footer.setLiveContextTokens).toHaveBeenLastCalledWith(50_500);
+
+			// Single-step provider (e.g. Anthropic): message_start has input + small output=3 while thinking streams 4000 chars.
+			const anthropicStreaming = makeAssistantMessage([{ type: "thinking", thinking: "x".repeat(4000) }], {
+				input: 100,
+				output: 3,
+				cacheRead: 50_000,
+				cacheWrite: 2_000,
+				totalTokens: 52_103,
+			});
+			await handleEvent({
+				type: "message_update",
+				message: anthropicStreaming,
+				assistantMessageEvent: {
+					type: "thinking_delta",
+					contentIndex: 0,
+					delta: "x",
+					partial: anthropicStreaming,
+				},
+			});
+			expect(footer.setLiveContextTokens).toHaveBeenLastCalledWith(53_100);
+
+			await handleEvent({ type: "message_end", message: step1 });
+			expect(footer.setLiveContextTokens).toHaveBeenLastCalledWith(undefined);
+		} finally {
+			indicator.dispose();
 		}
 	});
 });

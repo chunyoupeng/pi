@@ -5,12 +5,16 @@ import { CustomEditor } from "../src/modes/interactive/components/custom-editor.
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
+	computeShimmerBreath,
+	computeShimmerCenter,
+	computeShimmerHalfPeriodMs,
 	DEFAULT_WORKING_MESSAGES,
 	formatElapsedTime,
 	formatTtft,
 	IdleStatus,
 	pickWorkingMessage,
 	RetryStatusIndicator,
+	renderShimmerText,
 	WorkingStatusIndicator,
 } from "../src/modes/interactive/components/status-indicator.ts";
 import { getEditorTheme, initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -78,6 +82,19 @@ describe("status indicators", () => {
 		vi.advanceTimersByTime(3000);
 		expect(stripAnsi(indicator.render(80).join("\n"))).toContain("Working... (3s · 1.2k tokens)");
 
+		indicator.setDetail("still thinking with high effort");
+		const fullWithDetail = indicator.render(100)[1]!;
+		expect(stripAnsi(fullWithDetail)).toContain("Working... (3s · 1.2k tokens · still thinking with high effort)");
+		// Shimmer sweeps across the entire text including the parenthetical progress and thinking detail.
+		const suffixStart = fullWithDetail.indexOf("(");
+		expect(suffixStart).toBeGreaterThan(0);
+		const suffixShades = new Set(fullWithDetail.slice(suffixStart).match(/\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m/g) ?? []);
+		expect(suffixShades.size).toBeGreaterThan(2);
+
+		indicator.setDetail(undefined);
+		expect(stripAnsi(indicator.render(100).join("\n"))).toContain("Working... (3s · 1.2k tokens)");
+		expect(stripAnsi(indicator.render(100).join("\n"))).not.toContain("still thinking");
+
 		const callsBeforeDispose = vi.mocked(tui.requestRender).mock.calls.length;
 		indicator.dispose();
 		vi.advanceTimersByTime(2000);
@@ -97,12 +114,14 @@ describe("status indicators", () => {
 		expect(stripAnsi(editor.render(20)[0]!)).toBe("─".repeat(20));
 		const standaloneLine = indicator.render(20)[1]!;
 		expect(standaloneLine).toContain(theme.getFgAnsi("accent"));
-		expect(standaloneLine).toContain("Working");
+		expect(stripAnsi(standaloneLine)).toContain("Working");
 		indicator.dispose();
 	});
 
-	it("embeds the working indicator when the editor opts in", () => {
+	it("embeds the working indicator with a sweeping shimmer when the editor opts in", () => {
 		initTheme("dark");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
 		const tui = {
 			requestRender: vi.fn(),
 			terminal: { rows: 10 },
@@ -112,14 +131,83 @@ describe("status indicators", () => {
 		});
 		expect(editor.embedWorkingStatus).toBe(true);
 		editor.borderColor = theme.getThinkingBorderColor("high");
-		const indicator = new WorkingStatusIndicator(tui, "Working", undefined, (text) => editor.borderColor(text));
+		const indicator = new WorkingStatusIndicator(tui, "Still thinking with high effort", undefined, (text) =>
+			editor.borderColor(text),
+		);
 		editor.setWorkingStatusIndicator(indicator);
 
-		const topBorder = editor.render(20)[0]!;
-		expect(stripAnsi(topBorder)).toBe("── ✦ Working ───────");
-		expect(visibleWidth(topBorder)).toBe(20);
-		expect(topBorder.split(theme.getFgAnsi("thinkingHigh"))).toHaveLength(5);
+		const frame0 = editor.render(45)[0]!;
+		expect(stripAnsi(frame0)).toBe("── ✦ Still thinking with high effort ────────");
+		expect(visibleWidth(frame0)).toBe(45);
+		// Border prefix, spinner, and border suffix still use the thinking border color.
+		expect(frame0.split(theme.getFgAnsi("thinkingHigh")).length).toBeGreaterThanOrEqual(4);
+
+		// Advancing time sweeps the light-and-shadow shimmer across the label (not flat static text).
+		vi.advanceTimersByTime(600);
+		const frameMid = editor.render(45)[0]!;
+		expect(stripAnsi(frameMid)).toContain("Still thinking with high effort");
+		expect(visibleWidth(frameMid)).toBe(45);
+		expect(frameMid).not.toBe(frame0);
+		// Multiple distinct foreground ANSI shades appear across the shimmering phrase.
+		const shades = new Set(frameMid.match(/\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m/g) ?? []);
+		expect(shades.size).toBeGreaterThan(2);
+
 		indicator.dispose();
+	});
+
+	it("sweeps shimmer center back and forth and breathes overall brightness", () => {
+		initTheme("dark");
+		const text = "Still thinking with high effort";
+		const length = text.length;
+		const half = computeShimmerHalfPeriodMs(length);
+		const start = computeShimmerCenter(length, 0);
+		const quarter = computeShimmerCenter(length, half / 2);
+		const rightPeak = computeShimmerCenter(length, half);
+		const returnSweep = computeShimmerCenter(length, half * 1.5);
+		const cycleEnd = computeShimmerCenter(length, half * 2);
+
+		expect(start).toBeLessThan(0);
+		expect(start).toBeGreaterThan(-1);
+		expect(quarter).toBeGreaterThan(start);
+		expect(rightPeak).toBeGreaterThan(length - 1);
+		expect(rightPeak).toBeLessThan(length);
+		expect(returnSweep).toBeLessThan(rightPeak);
+		expect(cycleEnd).toBeCloseTo(start, 5);
+
+		// Breathing brightness oscillates smoothly from bright crest (1) down to dim trough (0) and back.
+		expect(computeShimmerBreath(0)).toBeCloseTo(1, 5);
+		expect(computeShimmerBreath(1300)).toBeCloseTo(0, 5);
+		expect(computeShimmerBreath(2600)).toBeCloseTo(1, 5);
+
+		// Same shimmer position at different breathing phases produces noticeably different overall brightness,
+		// and dim trough softens bold emphasis while bright crest gleams bold.
+		const averageRgbLuma = (rendered: string): number => {
+			const matches = [...rendered.matchAll(/\x1b\[38;2;(\d+);(\d+);(\d+)m/g)];
+			expect(matches.length).toBeGreaterThan(0);
+			const sum = matches.reduce(
+				(acc, m) => acc + 0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3]),
+				0,
+			);
+			return sum / matches.length;
+		};
+
+		const bright = renderShimmerText(text, theme.colors.thinkingHigh, 0);
+		const dim = renderShimmerText(text, theme.colors.thinkingHigh, 1300);
+		expect(bright).not.toBe(dim);
+		expect(averageRgbLuma(bright) - averageRgbLuma(dim)).toBeGreaterThan(45);
+		expect(bright).toContain("\x1b[1m");
+		expect(dim).not.toContain("\x1b[1m");
+
+		// Short working labels also keep distinct shimmer shades across the word.
+		const shortRendered = renderShimmerText("Running", theme.colors.thinkingXhigh, 0);
+		const shortShades = new Set(shortRendered.match(/\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m/g) ?? []);
+		expect(shortShades.size).toBeGreaterThan(2);
+
+		// Light mode also breathes noticeably between soft dim trough and vivid bright crest.
+		initTheme("light");
+		const lightBright = renderShimmerText(text, theme.colors.thinkingHigh, 0);
+		const lightDim = renderShimmerText(text, theme.colors.thinkingHigh, 1300);
+		expect(averageRgbLuma(lightDim) - averageRgbLuma(lightBright)).toBeGreaterThan(35);
 	});
 
 	it("embeds compaction, summary, and retry labels within the border width", () => {

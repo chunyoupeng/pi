@@ -75,6 +75,7 @@ import {
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
+import { calculateContextTokens } from "../../core/compaction/compaction.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
@@ -145,7 +146,11 @@ import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
-import { AssistantMessageComponent, estimateAssistantOutputTokens } from "./components/assistant-message.ts";
+import {
+	AssistantMessageComponent,
+	estimateAssistantContentTokens,
+	estimateAssistantOutputTokens,
+} from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CodemodeGroupComponent } from "./components/codemode-group.ts";
@@ -244,6 +249,48 @@ function isEmbeddedStatus(editor: EditorComponent): editor is WorkingStatusEdito
 		"setWorkingStatusIndicator" in editor &&
 		typeof editor.setWorkingStatusIndicator === "function"
 	);
+}
+
+function nextAssistantThinkingState(current: boolean, event: AssistantMessageEvent | undefined): boolean {
+	switch (event?.type) {
+		case "thinking_delta":
+			return event.delta.length > 0 ? true : current;
+		case "thinking_end":
+		case "text_start":
+		case "text_end":
+		case "toolcall_start":
+		case "toolcall_delta":
+		case "toolcall_end":
+		case "done":
+		case "error":
+			return false;
+		case "text_delta":
+			return event.delta.length > 0 ? false : current;
+		default:
+			return current;
+	}
+}
+
+function resolveWorkingDetail(
+	workingMessage: string | undefined,
+	isAssistantThinking: boolean,
+	thinkingLevel: ThinkingLevel | undefined,
+): string | undefined {
+	if (workingMessage !== undefined || !isAssistantThinking) return undefined;
+	return thinkingLevel && thinkingLevel !== "off" ? `still thinking with ${thinkingLevel} effort` : "still thinking";
+}
+
+function estimateLiveContextTokens(message: AssistantMessage): number | undefined {
+	const reportedContext = message.usage ? calculateContextTokens(message.usage) : 0;
+	if (reportedContext <= 0) return undefined;
+	const contentTokens = estimateAssistantContentTokens(message);
+	const promptTokens =
+		(message.usage?.input ?? 0) + (message.usage?.cacheRead ?? 0) + (message.usage?.cacheWrite ?? 0);
+	const reportedOutput = message.usage?.output ?? 0;
+	if (reportedContext === promptTokens + reportedOutput && contentTokens > reportedOutput) {
+		return promptTokens + contentTokens;
+	}
+	return reportedContext;
 }
 
 function isExpandable(obj: unknown): obj is Expandable {
@@ -625,6 +672,7 @@ export class InteractiveMode {
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private defaultWorkingMessage = pickWorkingMessage();
+	private isAssistantThinking = false;
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
@@ -2660,19 +2708,27 @@ export class InteractiveMode {
 		}
 	}
 
+	private getWorkingDetail(): string | undefined {
+		return resolveWorkingDetail(
+			this.workingMessage,
+			this.isAssistantThinking,
+			this.session?.routedModel?.thinkingLevel ?? this.session?.thinkingLevel,
+		);
+	}
+
 	private showWorkingStatusIndicator(): void {
 		const colorFn = isEmbeddedStatus(this.editor)
 			? (text: string) =>
 					(this.editor.borderColor ?? theme.getThinkingBorderColor(this.session.thinkingLevel || "off"))(text)
 			: undefined;
-		this.showStatusIndicator(
-			new WorkingStatusIndicator(
-				this.ui,
-				this.workingMessage ?? this.defaultWorkingMessage,
-				this.workingIndicatorOptions,
-				colorFn,
-			),
+		const indicator = new WorkingStatusIndicator(
+			this.ui,
+			this.workingMessage ?? this.defaultWorkingMessage,
+			this.workingIndicatorOptions,
+			colorFn,
 		);
+		indicator.setDetail(this.getWorkingDetail());
+		this.showStatusIndicator(indicator);
 	}
 
 	private setWorkingVisible(visible: boolean): void {
@@ -2699,12 +2755,19 @@ export class InteractiveMode {
 	private updateWorkingOutputTokenLabel(tokens: number): void {
 		if (this.agentStartedAt === undefined) return;
 		const message = this.workingMessage ?? this.defaultWorkingMessage;
+		const detail = resolveWorkingDetail(
+			this.workingMessage,
+			this.isAssistantThinking,
+			this.session?.routedModel?.thinkingLevel ?? this.session?.thinkingLevel,
+		);
 		if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
 			this.activeStatusIndicator.setMessage(message);
+			this.activeStatusIndicator.setDetail(detail);
 			this.activeStatusIndicator.setProgress(this.agentStartedAt, tokens);
 		} else if (this.session.isStreaming && this.workingVisible) {
 			this.showWorkingStatusIndicator();
 			if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+				this.activeStatusIndicator.setDetail(detail);
 				this.activeStatusIndicator.setProgress(this.agentStartedAt, tokens);
 			}
 		}
@@ -2713,6 +2776,7 @@ export class InteractiveMode {
 	private updateLiveOutputTokens(message: AssistantMessage): void {
 		const tokens = estimateAssistantOutputTokens(message);
 		this.footer.setLiveOutputTokens(tokens);
+		this.footer.setLiveContextTokens?.(estimateLiveContextTokens(message));
 		this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens + tokens);
 		this.footer.invalidate();
 		this.ui.requestRender();
@@ -2720,6 +2784,7 @@ export class InteractiveMode {
 
 	private clearLiveOutputTokens(): void {
 		this.footer.setLiveOutputTokens(0);
+		this.footer.setLiveContextTokens?.(undefined);
 		this.footer.invalidate();
 	}
 
@@ -2984,7 +3049,10 @@ export class InteractiveMode {
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
 			setWorkingMessage: (message) => {
 				this.workingMessage = message;
-				if (this.activeStatusIndicator?.kind === "working") {
+				if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+					this.activeStatusIndicator.setMessage(message ?? this.defaultWorkingMessage);
+					this.activeStatusIndicator.setDetail(this.getWorkingDetail());
+				} else if (this.activeStatusIndicator?.kind === "working") {
 					this.activeStatusIndicator.setMessage(message ?? this.defaultWorkingMessage);
 				}
 			},
@@ -3761,6 +3829,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.defaultWorkingMessage = pickWorkingMessage();
+				this.isAssistantThinking = false;
 				this.agentStartedAt = Date.now();
 				this.agentFirstTokenAt = undefined;
 				this.assistantFirstTokenAt = undefined;
@@ -3777,12 +3846,16 @@ export class InteractiveMode {
 				break;
 
 			case "turn_start":
+				this.isAssistantThinking = false;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
 				if (this.workingVisible) {
 					if (this.activeStatusIndicator?.kind !== "working") {
 						this.showWorkingStatusIndicator();
+					} else if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+						this.activeStatusIndicator.setMessage(this.workingMessage ?? this.defaultWorkingMessage);
+						this.activeStatusIndicator.setDetail(undefined);
 					}
 				} else {
 					this.clearStatusIndicator();
@@ -3861,6 +3934,11 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					this.isAssistantThinking = false;
+					if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+						this.activeStatusIndicator.setMessage(this.workingMessage ?? this.defaultWorkingMessage);
+						this.activeStatusIndicator.setDetail(undefined);
+					}
 					this.assistantFirstTokenAt = undefined;
 					this.streamingComponent = new AssistantMessageComponent(
 						undefined,
@@ -3890,6 +3968,21 @@ export class InteractiveMode {
 					this.assistantFirstTokenAt = now;
 					if (this.agentFirstTokenAt === undefined) {
 						this.agentFirstTokenAt = now;
+					}
+				}
+				if (event.message.role === "assistant") {
+					const nextThinking = nextAssistantThinkingState(this.isAssistantThinking, event.assistantMessageEvent);
+					if (nextThinking !== this.isAssistantThinking) {
+						this.isAssistantThinking = nextThinking;
+						if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+							this.activeStatusIndicator.setDetail(
+								resolveWorkingDetail(
+									this.workingMessage,
+									this.isAssistantThinking,
+									this.session?.routedModel?.thinkingLevel ?? this.session?.thinkingLevel,
+								),
+							);
+						}
 					}
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
@@ -3932,6 +4025,7 @@ export class InteractiveMode {
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (event.message.role === "assistant") {
+					this.isAssistantThinking = false;
 					if (this.assistantFirstTokenAt !== undefined) {
 						this.completedAgentGenerationMs += Math.max(0, Date.now() - this.assistantFirstTokenAt);
 						this.assistantFirstTokenAt = undefined;
@@ -4002,6 +4096,12 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				if (this.isAssistantThinking) {
+					this.isAssistantThinking = false;
+					if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+						this.activeStatusIndicator.setDetail(undefined);
+					}
+				}
 				// Nested calls (from codemode scripts) are shown inside their parent's row.
 				if (event.parentToolCallId) break;
 				let component = this.pendingTools.get(event.toolCallId);
@@ -4050,6 +4150,7 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
+				this.isAssistantThinking = false;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -5048,6 +5149,13 @@ export class InteractiveMode {
 		} else {
 			const level = this.session.thinkingLevel || "off";
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
+		}
+		if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+			if (!this.workingIndicatorOptions) {
+				this.activeStatusIndicator.setIndicator();
+			}
+			this.activeStatusIndicator.setMessage(this.workingMessage ?? this.defaultWorkingMessage);
+			this.activeStatusIndicator.setDetail(this.getWorkingDetail());
 		}
 		this.activeStatusIndicator?.invalidate();
 		this.ui.requestRender();
