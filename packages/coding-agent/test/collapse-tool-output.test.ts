@@ -391,11 +391,9 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(finalOutput).toContain("Write(src/new.ts)");
 		expect(finalOutput).toContain("└─ Wrote 1 line");
 		expect(finalOutput).not.toContain("LIVE_WRITE_BODY");
-		expect(finalOutput).toContain("Read(src/a.ts)");
-		expect(finalOutput).toContain("└─ Read 2 lines");
-		expect(finalOutput).toContain("Read(src/b.ts)");
-		expect(finalOutput).toContain("└─ Read 1 line");
-		expect(finalOutput).not.toContain("Read 2 files");
+		expect(finalOutput).toContain("Read 2 files");
+		expect(finalOutput).toContain("└─ src/a.ts");
+		expect(finalOutput).toContain("└─ src/b.ts");
 		expect(finalOutput).not.toContain("LIVE_READ_A_1");
 		expect(finalOutput).not.toContain("LIVE_READ_B_1");
 	});
@@ -558,8 +556,8 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(collapsedOutput).toContain("Write(src/write.ts)");
 		expect(collapsedOutput).toContain("└─ Wrote 1 line");
 		expect(collapsedOutput).not.toContain("RESUMED_WRITE_BODY");
-		expect(collapsedOutput).toContain("Read(src/read.ts)");
-		expect(collapsedOutput).toContain("└─ Read 2 lines");
+		expect(collapsedOutput).toContain("Read 1 file");
+		expect(collapsedOutput).toContain("└─ src/read.ts");
 		expect(collapsedOutput).not.toContain("RESUMED_READ_1");
 
 		const previewCtx = createFakeInteractiveContext({ collapseToolOutput: false });

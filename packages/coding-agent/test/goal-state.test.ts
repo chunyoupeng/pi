@@ -1,5 +1,5 @@
 /**
- * Unit tests for goal extension state helpers and formatting.
+ * Unit tests for goal extension state helpers, command parsing, and prompt builders.
  */
 
 import { describe, expect, it } from "vitest";
@@ -13,7 +13,8 @@ import {
 	isGoalClearedMarker,
 	isGoalState,
 	loadGoalFromEntries,
-	parseGoalEditArgs,
+	MAX_GOAL_OBJECTIVE_CHARS,
+	parseGoalCommand,
 } from "../src/extensions/goal/state.ts";
 
 function customEntry(data: unknown, overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -35,9 +36,10 @@ describe("goal state helpers", () => {
 			status: "active",
 			objective: "Fix the parser",
 			timeUsedMs: 0,
+			rounds: 0,
 			revision: 1,
 			createdAt: 1000,
-			activeSinceMs: 1000,
+			updatedAt: 1000,
 		});
 		expect(state.goalId.length).toBeGreaterThan(0);
 		expect(isGoalState(state)).toBe(true);
@@ -47,17 +49,39 @@ describe("goal state helpers", () => {
 		expect(createGoalState("  spaced  ").objective).toBe("spaced");
 	});
 
-	it("validates malformed goal data", () => {
+	it("validates malformed goal data and objective length", () => {
 		expect(isGoalState(null)).toBe(false);
 		expect(isGoalState({ version: 99 })).toBe(false);
 		expect(isGoalState({ version: 1, goalId: "x", status: "bogus" })).toBe(false);
+
+		const overlong = { ...createGoalState("ok", 100), objective: "a".repeat(MAX_GOAL_OBJECTIVE_CHARS + 1) };
+		expect(isGoalState(overlong)).toBe(false);
 	});
 
-	it("does not expose token budget fields in the state model", () => {
-		const state = createGoalState("No budgets", 1000);
-		expect(state).not.toHaveProperty("tokensUsed");
-		expect(state).not.toHaveProperty("tokenBudget");
-		expect(state).not.toHaveProperty("usageBaseline");
+	it("loads legacy persisted snapshots missing rounds and normalizes them", () => {
+		const legacy = {
+			version: 1,
+			goalId: "legacy123",
+			revision: 2,
+			status: "active",
+			objective: "Legacy goal",
+			createdAt: 10,
+			updatedAt: 20,
+			timeUsedMs: 500,
+			activeSinceMs: 15,
+		};
+		const loaded = loadGoalFromEntries([customEntry(legacy)]);
+		expect(loaded).toEqual({
+			version: 1,
+			goalId: "legacy123",
+			revision: 2,
+			status: "active",
+			objective: "Legacy goal",
+			createdAt: 10,
+			updatedAt: 20,
+			timeUsedMs: 500,
+			rounds: 0,
+		});
 	});
 
 	it("detects cleared markers", () => {
@@ -72,15 +96,11 @@ describe("goal state helpers", () => {
 		expect(loadGoalFromEntries(entries)?.objective).toBe("Second");
 	});
 
-	it("returns null when entries carry no goal", () => {
+	it("returns null when entries carry no goal or end in cleared marker", () => {
 		expect(loadGoalFromEntries([])).toBeNull();
 		expect(loadGoalFromEntries([customEntry(undefined)])).toBeNull();
-	});
-
-	it("returns null when the latest goal entry is a cleared marker", () => {
 		const state = createGoalState("Old", 10);
-		const entries = [customEntry(state), customEntry({ status: "cleared", clearedAt: 20 })];
-		expect(loadGoalFromEntries(entries)).toBeNull();
+		expect(loadGoalFromEntries([customEntry(state), customEntry({ status: "cleared", clearedAt: 20 })])).toBeNull();
 	});
 
 	it("keeps scanning older entries when the newest one is malformed", () => {
@@ -94,24 +114,62 @@ describe("goal state helpers", () => {
 		expect(formatDuration(90_000)).toBe("1m 30s");
 		expect(formatDuration(3_600_000)).toBe("1h 0m");
 	});
+});
 
-	it("parses goal edit arguments as the new objective", () => {
-		expect(parseGoalEditArgs("new objective")).toBe("new objective");
-		expect(parseGoalEditArgs("  spaced  ")).toBe("spaced");
-		expect(parseGoalEditArgs("")).toBeNull();
-		expect(parseGoalEditArgs("   ")).toBeNull();
+describe("parseGoalCommand", () => {
+	it("parses exact zero-argument subcommands", () => {
+		expect(parseGoalCommand("")).toEqual({ kind: "show" });
+		expect(parseGoalCommand("   ")).toEqual({ kind: "show" });
+		expect(parseGoalCommand("show")).toEqual({ kind: "show" });
+		expect(parseGoalCommand("STATUS")).toEqual({ kind: "show" });
+		expect(parseGoalCommand("pause")).toEqual({ kind: "pause" });
+		expect(parseGoalCommand("resume")).toEqual({ kind: "resume" });
+		expect(parseGoalCommand("clear")).toEqual({ kind: "clear" });
 	});
 
-	it("builds hidden context containing objective/status/time as user data", () => {
+	it("does not hijack natural-language objectives starting with zero-arg subcommands", () => {
+		expect(parseGoalCommand("clear unused imports in src/")).toEqual({
+			kind: "create",
+			objective: "clear unused imports in src/",
+		});
+		expect(parseGoalCommand("show progress bar in footer")).toEqual({
+			kind: "create",
+			objective: "show progress bar in footer",
+		});
+		expect(parseGoalCommand("status page redesign")).toEqual({
+			kind: "create",
+			objective: "status page redesign",
+		});
+		expect(parseGoalCommand("pause background jobs during compaction")).toEqual({
+			kind: "create",
+			objective: "pause background jobs during compaction",
+		});
+		expect(parseGoalCommand("resume failed downloads automatically")).toEqual({
+			kind: "create",
+			objective: "resume failed downloads automatically",
+		});
+	});
+
+	it("parses edit and explicit set subcommands", () => {
+		expect(parseGoalCommand("edit")).toEqual({ kind: "edit", objective: null });
+		expect(parseGoalCommand("edit   ")).toEqual({ kind: "edit", objective: null });
+		expect(parseGoalCommand("edit New objective")).toEqual({ kind: "edit", objective: "New objective" });
+		expect(parseGoalCommand("set edit config loader")).toEqual({ kind: "create", objective: "edit config loader" });
+		expect(parseGoalCommand("set pause")).toEqual({ kind: "create", objective: "pause" });
+	});
+});
+
+describe("goal prompt builders", () => {
+	it("builds hidden context referencing the unified goal tool", () => {
 		const state = createGoalState("Ship the feature", 100);
-		const content = buildGoalContextContent(state);
+		const content = buildGoalContextContent(state, 5000);
 		expect(content).toContain("Ship the feature");
 		expect(content).toContain("active");
-		expect(content).toContain("Time used:");
-		expect(content).toContain("update_goal");
+		expect(content).toContain("Time used: 5s");
+		expect(content).toContain('action="complete"');
+		expect(content).toContain('action="blocked"');
 		expect(content).toContain("user-provided data");
-		expect(content).not.toContain("Tokens used");
-		expect(content).not.toContain("budget");
+		expect(content).not.toContain("update_goal");
 	});
 
 	it("builds hidden context for paused goals without work instructions", () => {
@@ -122,13 +180,28 @@ describe("goal state helpers", () => {
 		expect(content).toContain("Do not work toward it");
 	});
 
-	it("builds continuation content referencing the goal id", () => {
+	it("builds full and compact continuation prompts appropriately", () => {
 		const state = createGoalState("Ship the feature", 100);
-		const content = buildContinuationContent(state);
-		expect(content).toContain(state.goalId);
-		expect(content).toContain("Ship the feature");
-		expect(content).toContain('"complete"');
-		expect(content).not.toContain("Tokens used");
-		expect(content).not.toContain("budget");
+		const full = buildContinuationContent(state, {
+			timeUsedMs: 1000,
+			round: 1,
+			includeObjective: true,
+			kind: "start",
+		});
+		expect(full).toContain(state.goalId);
+		expect(full).toContain("Ship the feature");
+		expect(full).toContain("round #1");
+		expect(full).toContain('action="complete"');
+
+		const compact = buildContinuationContent(state, {
+			timeUsedMs: 12_000,
+			round: 3,
+			includeObjective: false,
+			kind: "continue",
+		});
+		expect(compact).toContain(state.goalId);
+		expect(compact).toContain("round #3");
+		expect(compact).toContain("12s");
+		expect(compact).not.toContain("Ship the feature");
 	});
 });

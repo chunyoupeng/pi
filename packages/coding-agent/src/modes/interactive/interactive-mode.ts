@@ -123,7 +123,7 @@ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
-import { type ToolRenderers, withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
+import { readRenderers, type ToolRenderers, withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
@@ -173,6 +173,7 @@ import {
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
+import { ReadGroupComponent } from "./components/read-group.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -461,7 +462,15 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
-const NON_COLLAPSIBLE_PREVIEW_TOOLS = new Set(["edit", "write", "read"]);
+const NON_COLLAPSIBLE_PREVIEW_TOOLS = new Set(["edit", "write"]);
+
+function isDefaultReadTool(toolName: string, toolDefinition: ToolRenderers | undefined): boolean {
+	return (
+		toolName === "read" &&
+		toolDefinition?.renderCall === readRenderers.renderCall &&
+		toolDefinition?.renderResult === readRenderers.renderResult
+	);
+}
 
 function isDefaultCodemodeTool(toolName: string, toolDefinition: ToolRenderers | undefined): boolean {
 	return (
@@ -471,7 +480,7 @@ function isDefaultCodemodeTool(toolName: string, toolDefinition: ToolRenderers |
 	);
 }
 
-function findJoinableGroup<T extends CodemodeGroupComponent>(
+function findJoinableGroup<T extends ReadGroupComponent | CodemodeGroupComponent>(
 	chatContainer: Container,
 	groupType: new (...args: any[]) => T,
 ): T | undefined {
@@ -490,6 +499,7 @@ function findJoinableGroup<T extends CodemodeGroupComponent>(
 }
 
 function sealActiveToolGroups(chatContainer: Container): void {
+	findJoinableGroup(chatContainer, ReadGroupComponent)?.seal();
 	findJoinableGroup(chatContainer, CodemodeGroupComponent)?.seal();
 }
 
@@ -504,6 +514,15 @@ function addToolCallToChat(
 	cwd: string,
 	expanded: boolean,
 ): ToolCallHandle {
+	if (isDefaultReadTool(toolName, toolDefinition)) {
+		let group = findJoinableGroup(chatContainer, ReadGroupComponent);
+		if (!group) {
+			group = new ReadGroupComponent(options, ui, cwd);
+			group.setExpanded(expanded);
+			chatContainer.addChild(group);
+		}
+		return group.addCall(toolCallId, args);
+	}
 	if (isDefaultCodemodeTool(toolName, toolDefinition)) {
 		let group = findJoinableGroup(chatContainer, CodemodeGroupComponent);
 		if (!group) {
@@ -5455,7 +5474,11 @@ export class InteractiveMode {
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent || child instanceof CodemodeGroupComponent) {
+							if (
+								child instanceof ToolExecutionComponent ||
+								child instanceof ReadGroupComponent ||
+								child instanceof CodemodeGroupComponent
+							) {
 								child.setShowImages(enabled);
 							}
 						}
@@ -5463,7 +5486,11 @@ export class InteractiveMode {
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent || child instanceof CodemodeGroupComponent) {
+							if (
+								child instanceof ToolExecutionComponent ||
+								child instanceof ReadGroupComponent ||
+								child instanceof CodemodeGroupComponent
+							) {
 								child.setImageWidthCells(width);
 							}
 						}
@@ -5552,7 +5579,10 @@ export class InteractiveMode {
 								!NON_COLLAPSIBLE_PREVIEW_TOOLS.has(child.getToolName())
 							) {
 								child.setPreviewCollapsed(collapsed);
-							} else if (child instanceof CodemodeGroupComponent && !child.isActiveInTurn(this.turnTools)) {
+							} else if (
+								(child instanceof ReadGroupComponent || child instanceof CodemodeGroupComponent) &&
+								!child.isActiveInTurn(this.turnTools)
+							) {
 								child.setPreviewCollapsed(collapsed);
 							}
 						}

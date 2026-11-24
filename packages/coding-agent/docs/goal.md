@@ -1,36 +1,41 @@
 # Goals
 
-The goal extension gives Pi a Codex-style persistent goal: set an objective once, and the agent keeps working toward it across turns until it is completed, blocked, or paused.
+The goal extension gives Pi a Codex-style persistent goal: set an objective once, and the agent keeps working toward it across rounds until it is completed, blocked, paused, or aborted.
 
-The goal is built in and always available. State is persisted in the session as custom entries, so it survives restarts and resumes on the current session branch like any other conversation state.
+The goal extension is built in and always available. State is persisted in the session as custom entries, so it survives restarts and resumes on the current session branch like any other conversation state.
 
 ## Commands
 
 | Command | Description |
 | ------- | ----------- |
-| `/goal` | Show the current goal, status, and time used. |
+| `/goal` (or `/goal show`, `/goal status`) | Show the current goal, status, rounds, and active time used. |
 | `/goal <objective>` | Create a new goal (or replace an unfinished one after confirmation). |
+| `/goal set <objective>` | Explicit alias for creating a goal (useful when the objective starts with a subcommand keyword). |
 | `/goal pause` | Pause the goal and stop auto-continuation. |
-| `/goal resume` | Resume a paused or blocked goal. |
+| `/goal resume` | Resume a paused or blocked goal (or kick off a restored idle active goal). |
 | `/goal clear` | Clear the goal entirely. |
-| `/goal edit [<objective>]` | Change the objective. |
+| `/goal edit [<objective>]` | Update the objective (opens an editor when omitted in interactive UI). |
+
+Zero-argument subcommands (`show`, `status`, `pause`, `resume`, `clear`) match only when given with no trailing text, so natural-language objectives like `/goal clear unused imports` create a goal instead of running `clear`.
 
 ## How it works
 
-- **Hidden context**: before each round, the extension injects a hidden custom message with the objective, status, and time used. The objective is treated as user-provided data; it is never added to the system prompt.
-- **Auto-continuation**: after the agent fully settles (`agent_settled`) - when the goal is active, the agent is idle, there are no queued messages, and the run was not aborted - a hidden continuation message triggers the next round. Commands that activate a goal (`/goal <objective>`, `/goal resume`) start the first round immediately when the agent is idle; while streaming or when messages are queued they skip and let the settle path schedule the continuation. Duplicate scheduling is prevented, and the continuation is checked against the latest goal revision so pausing, clearing, or replacing the goal stops old work immediately.
-- **Time accounting**: each finished turn accrues the running time toward the goal, including the turn that marks the goal `complete` or `blocked` (the tool call happens before `turn_end`, so the state flip does not drop that turn's time). No token or resource budgets are enforced.
+- **Hidden context**: on `before_agent_start`, the extension injects a hidden custom message with the objective, goal ID, status, and active time used whenever the goal state is new, edited, restored, or compacted (`session_compact`). The objective is treated as user-provided data and is never added to the system prompt.
+- **Auto-continuation (`agent_before_settle`)**: when a round finishes cleanly (`outcome === "completed"`) with an active goal, no queued messages, and no prior continuation, the extension appends a continuation message and keeps the run going in the same session loop. Aborted runs (Escape) skip `agent_before_settle` automatically; errored runs stop without continuing. Subsequent rounds send compact reminders without duplicating the full objective unless compaction or an edit requires re-injection.
+- **Idle-loop protection**: if 3 consecutive rounds finish with no non-goal tool calls, the goal auto-pauses and notifies the user so forgotten completion calls cannot spin indefinitely.
+- **Active run time accounting**: `timeUsedMs` counts wall-clock time spent inside agent runs while the goal is active (not idle time between sessions or while waiting on the user), including the turn that marks the goal `complete` or `blocked`. No token or resource budgets are enforced.
+- **Branch navigation**: restoring a session (`session_start`) or switching branches (`/tree`) restores the branch's latest goal without auto-starting LLM work; run `/goal resume` or send a message to continue.
 
-## Tools
+## Tool
 
-The LLM can manage the goal through three tools:
+The LLM manages the goal through a single `goal` tool with an `action` parameter:
 
-- `get_goal` - read the current goal (objective, status, time used).
-- `create_goal` - only used when the user explicitly asks to start a new goal. Refuses to replace an unfinished goal unless `overwrite=true`. Following Codex semantics, `active`, `paused`, and `blocked` goals are all unfinished - only a `complete` goal can be replaced without confirmation.
-- `update_goal` - marks the goal `complete` (objective fully achieved) or `blocked` (cannot proceed, e.g. missing credentials or an external dependency). Both stop auto-continuation.
+- `action="get"` - read the current goal (objective, status, rounds, live active time used), or `null` when none is set.
+- `action="create"` - start a new goal (`objective`, optional `overwrite=true`). Only used when the user explicitly asks to start a new goal. Refuses to replace an unfinished (`active`, `paused`, or `blocked`) goal unless `overwrite=true`.
+- `action="complete"` - mark the active goal complete (`goalId`, optional `note`) once fully achieved and verified. Stops auto-continuation.
+- `action="blocked"` - mark the active goal blocked (`goalId`, optional `note`) when unable to proceed. Stops auto-continuation.
 
 ## Notes
 
-- Goal state is stored in session custom entries. Because entries do not participate in the LLM context, the objective is only re-injected each round as a hidden custom message.
-- Forking, resuming, and compacting a session preserve the latest goal state on the active branch.
-- In print mode (`-p`), `/goal` prints the summary to stdout instead of showing a notification.
+- Goal state is stored in session custom entries (`goal`). Continuation rounds are rendered as compact transcript banners that can be expanded to inspect the full prompt.
+- In print and JSON modes (`-p`, `--mode json`), `/goal` prints the summary to stdout, and `/goal <objective>` / `/goal resume` wait for the goal run to finish before exiting.

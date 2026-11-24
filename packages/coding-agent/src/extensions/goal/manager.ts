@@ -1,156 +1,159 @@
 /**
- * Goal extension - goal controller.
+ * Goal extension - goal lifecycle controller.
  *
- * Encapsulates goal lifecycle: create/replace, pause/resume/clear/edit,
- * completion via tools, per-turn time accounting, and guarded
- * auto-continuation on agent settle. Kept free of pi/ctx references so it can
- * be unit tested with fakes; `index.ts` wires it to the extension API. The
- * goal tracks wall-clock time only; it never enforces token or resource
- * budgets.
+ * Manages goal mutations (create/replace, pause, resume, clear, edit, complete,
+ * block), active run time accounting, consecutive idle-round protection, and
+ * `agent_before_settle` continuation decisions. Kept decoupled from ExtensionAPI
+ * so every transition can be unit tested directly.
  */
 
-import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
 import type { SessionEntry } from "../../core/session-manager.ts";
-import { sleep } from "../../utils/sleep.ts";
 import {
 	buildContinuationContent,
 	buildGoalContextContent,
+	cloneGoal,
 	createGoalState,
-	formatDuration,
-	GOAL_CONTINUATION_DELAY_MS,
 	type GoalClearedMarker,
+	type GoalContinuationDetails,
 	type GoalState,
 	isGoalUnfinished,
 	loadGoalFromEntries,
+	MAX_CONSECUTIVE_IDLE_ROUNDS,
 	MAX_GOAL_OBJECTIVE_CHARS,
 } from "./state.ts";
 
-export type GoalMutationResult = "created" | "changed" | "cleared" | "paused" | "resumed" | "cancelled" | "noop";
+export type GoalMutationOutcome =
+	| { status: "created"; state: GoalState }
+	| { status: "changed"; state: GoalState }
+	| { status: "paused"; state: GoalState }
+	| { status: "resumed"; state: GoalState }
+	| { status: "cleared"; previousGoalId: string }
+	| { status: "cancelled" }
+	| { status: "unchanged"; state: GoalState; message: string }
+	| { status: "error"; error: string };
 
-export type GoalSettleResult = "continued" | "skipped";
+export type GoalStartResult = "continued" | "skipped";
+
+export type GoalBeforeSettleDecision =
+	| { continue: true; content: string; details: GoalContinuationDetails }
+	| { continue: false; autoPaused?: boolean };
 
 export interface GoalManagerOptions {
 	/** Persist a goal snapshot or cleared marker into the session. */
 	persist: (entry: GoalState | GoalClearedMarker) => void;
 	notify: (message: string, type?: "info" | "warning" | "error") => void;
-	/** Schedule the next auto-continuation round (hidden custom message). */
-	sendContinuation: (content: string, details: { goalId: string; revision: number }) => void;
-	/** Called after any mutation so the host can refresh the footer/status. */
+	/** Start an idle goal run immediately via a custom message with triggerTurn. */
+	sendContinuation: (content: string, details: GoalContinuationDetails) => void;
+	/** Called after any state or elapsed-time change so the host can refresh status UI. */
 	onStateChange?: () => void;
-	/** Injectable delay for settle-time continuation (tests). */
-	delay?: (ms: number) => Promise<void>;
 	now?: () => number;
+	maxConsecutiveIdleRounds?: number;
 }
 
-/** Per-call UI that commands/tools derive from an ExtensionContext. */
+/** Per-call UI capabilities derived from an ExtensionContext or ExtensionCommandContext. */
 export interface GoalUI {
 	hasUI: boolean;
 	/** Returns true when the user confirms, or when no UI is available. */
 	requestConfirm: (title: string, message: string) => Promise<boolean>;
-	/** Abort the current agent operation (used when goals are replaced/cleared). */
-	abort: () => void;
+	/** Abort the current agent operation when replacing/pausing/clearing from a command. Omit in tool calls. */
+	abort?: () => void;
+	/** Wait for the aborted agent run to settle before starting a replacement goal. */
+	waitForIdle?: () => Promise<void>;
 	isStreaming: () => boolean;
 }
 
 export class GoalManager {
 	private state: GoalState | null = null;
-	private continuationScheduled = false;
+	private runStartedAtMs: number | null = null;
+	private timeDirty = false;
 	/**
-	 * True when the goal was flipped to a terminal status (complete/blocked)
-	 * during the current turn, before `turn_end`. The completing turn's time
-	 * must still be accrued even though the state is no longer active.
+	 * True when the goal left `active` (complete/blocked/paused) mid-run before
+	 * `turn_end` / `agent_end`, so the remaining execution time of the current
+	 * turn is still accrued once.
 	 */
 	private accountTerminalTurn = false;
+	/** Prevents duplicate `startIfIdle` triggers before `onAgentStart` runs. */
+	private startKicked = false;
+	/** Suppresses continuation while an old streaming run is being aborted for replacement. */
+	private replacing = false;
+	/** True when at least one non-goal tool ran during the current agent loop. */
+	private toolExecutedInRun = false;
+	private consecutiveIdleRounds = 0;
+	private autoPausedNote: string | undefined = undefined;
+
 	private readonly persist: GoalManagerOptions["persist"];
 	private readonly notify: GoalManagerOptions["notify"];
 	private readonly sendContinuation: GoalManagerOptions["sendContinuation"];
 	private readonly onStateChange: (() => void) | undefined;
-	private readonly delay: (ms: number) => Promise<void>;
 	private readonly now: () => number;
+	private readonly maxConsecutiveIdleRounds: number;
 
 	constructor(options: GoalManagerOptions) {
 		this.persist = options.persist;
 		this.notify = options.notify;
 		this.sendContinuation = options.sendContinuation;
 		this.onStateChange = options.onStateChange;
-		this.delay = options.delay ?? ((ms) => sleep(ms));
 		this.now = options.now ?? (() => Date.now());
+		this.maxConsecutiveIdleRounds = options.maxConsecutiveIdleRounds ?? MAX_CONSECUTIVE_IDLE_ROUNDS;
 	}
 
-	getState(): GoalState | null {
-		return this.state ? { ...this.state } : null;
+	/** Live goal snapshot with up-to-date active run time. */
+	getState(now: number = this.now()): GoalState | null {
+		if (!this.state) return null;
+		const snapshot = cloneGoal(this.state);
+		snapshot.timeUsedMs = this.elapsedTimeMs(now);
+		return snapshot;
+	}
+
+	/** Active run time accumulated so far, including any currently running turn. */
+	elapsedTimeMs(now: number = this.now()): number {
+		if (!this.state) return 0;
+		const liveDelta = this.runStartedAtMs !== null ? Math.max(0, now - this.runStartedAtMs) : 0;
+		return this.state.timeUsedMs + liveDelta;
 	}
 
 	/** Restore the latest goal snapshot from the current session branch. */
 	restore(entries: readonly SessionEntry[]): void {
-		// Reset any scheduled continuation and stale mid-turn accounting from
-		// the previous runtime/session.
-		this.continuationScheduled = false;
-		this.accountTerminalTurn = false;
+		this.resetRuntime();
 		this.state = loadGoalFromEntries(entries);
-		// Don't count downtime between process restarts against the goal.
-		if (this.state?.status === "active") {
-			this.state.activeSinceMs = this.now();
-		}
 		this.onStateChange?.();
 	}
 
-	getStatusText(): string | undefined {
-		const state = this.state;
-		if (!state) return undefined;
-		const objective = state.objective.length > 22 ? `${state.objective.slice(0, 21)}…` : state.objective;
-		return `🎯 ${objective} · ${state.status}`;
+	/** Tear down runtime timers/flags on session shutdown without touching UI. */
+	shutdown(): void {
+		this.resetRuntime();
 	}
 
-	formatSummary(now: number = this.now()): string {
-		const state = this.state;
-		if (!state) {
-			return "No goal is set. Create one with /goal <objective>.";
-		}
-		const totalTime = this.elapsedTimeMs(state, now);
-		const lines = [
-			`Goal: ${state.objective}`,
-			`Goal ID: ${state.goalId} (revision ${state.revision})`,
-			`Status: ${state.status}`,
-			`Time used: ${formatDuration(totalTime)}`,
-			`Created: ${new Date(state.createdAt).toLocaleString()}`,
-			`Updated: ${new Date(state.updatedAt).toLocaleString()}`,
-		];
-		if (state.completedAtMs !== undefined) {
-			lines.push(`Completed: ${new Date(state.completedAtMs).toLocaleString()}`);
-		}
-		if (state.note) lines.push(`Note: ${state.note}`);
-		if (state.blockedReason) lines.push(`Blocked reason: ${state.blockedReason}`);
-		return lines.join("\n");
-	}
-
-	/** Context injected before each user round (active/paused goals only). */
-	buildContextContent(): string | null {
+	/** Hidden context message injected before a run (active/paused goals only). */
+	buildContextContent(now: number = this.now()): string | null {
 		const state = this.state;
 		if (!state) return null;
 		if (state.status !== "active" && state.status !== "paused") return null;
-		return buildGoalContextContent(state);
+		return buildGoalContextContent(state, this.elapsedTimeMs(now));
 	}
 
 	// =========================================================================
-	// User commands & tools
+	// User commands & tool mutations
 	// =========================================================================
 
 	/**
 	 * Create a new goal. Replacing an unfinished goal (active, paused, or
-	 * blocked) requires confirmation and aborts any in-flight work toward the
-	 * old goal.
+	 * blocked) requires confirmation. When invoked from a command while
+	 * streaming, aborts the old run and waits for it to become idle first.
 	 */
-	async create(objective: string, ui: GoalUI): Promise<GoalMutationResult> {
+	async create(objective: string, ui: GoalUI): Promise<GoalMutationOutcome> {
 		const trimmed = objective.trim();
 		if (!trimmed) {
+			const error = "Goal objective cannot be empty.";
 			this.notify("Usage: /goal <objective>", "warning");
-			return "noop";
+			return { status: "error", error };
 		}
 		if (trimmed.length > MAX_GOAL_OBJECTIVE_CHARS) {
-			this.notify(`Goal objective must be at most ${MAX_GOAL_OBJECTIVE_CHARS} characters.`, "warning");
-			return "noop";
+			const error = `Goal objective must be at most ${MAX_GOAL_OBJECTIVE_CHARS} characters.`;
+			this.notify(error, "warning");
+			return { status: "error", error };
 		}
+
 		const existing = this.state;
 		const unfinished = existing !== null && isGoalUnfinished(existing.status);
 		if (unfinished && existing) {
@@ -160,256 +163,405 @@ export class GoalManager {
 			);
 			if (!ok) {
 				this.notify("Goal creation cancelled.", "info");
-				return "cancelled";
+				return { status: "cancelled" };
 			}
-			// Stop any in-flight work toward the old goal.
-			if (ui.isStreaming()) ui.abort();
+			if (ui.isStreaming() && ui.abort) {
+				this.replacing = true;
+				try {
+					ui.abort();
+					if (ui.waitForIdle) {
+						await ui.waitForIdle();
+					}
+				} finally {
+					this.replacing = false;
+				}
+			}
 		}
+
 		const now = this.now();
+		const stillStreaming = ui.isStreaming() && !ui.abort;
+		this.resetRuntime();
 		this.state = createGoalState(trimmed, now);
-		this.continuationScheduled = false;
+		if (stillStreaming) {
+			// Created from an in-flight tool call: count the rest of this run and
+			// do not treat the creation turn itself as an idle round.
+			this.runStartedAtMs = now;
+			this.toolExecutedInRun = true;
+		}
 		this.commit(this.state, `Goal created: ${trimmed}`, "info");
-		return "created";
+		return { status: "created", state: this.getState(now)! };
 	}
 
-	async clear(ui: GoalUI): Promise<GoalMutationResult> {
+	async clear(ui: GoalUI): Promise<GoalMutationOutcome> {
 		const state = this.state;
 		if (!state) {
-			this.notify("No goal to clear.", "info");
-			return "noop";
+			const error = "No goal to clear.";
+			this.notify(error, "info");
+			return { status: "error", error };
 		}
 		const ok = await ui.requestConfirm("Clear goal?", `Remove the current goal:\n\n${state.objective}`);
 		if (!ok) {
 			this.notify("Goal clear cancelled.", "info");
-			return "cancelled";
+			return { status: "cancelled" };
 		}
-		if (ui.isStreaming()) ui.abort();
+		const previousGoalId = state.goalId;
 		this.state = null;
-		this.continuationScheduled = false;
-		this.persist({ status: "cleared", clearedAt: this.now(), goalId: state.goalId });
-		this.notify("Goal cleared.");
-		this.onStateChange?.();
-		return "cleared";
-	}
-
-	pause(ui: GoalUI): GoalMutationResult {
-		const state = this.state;
-		if (!state) {
-			this.notify("No goal to pause.", "info");
-			return "noop";
-		}
-		if (state.status === "paused") {
-			this.notify("Goal is already paused.", "info");
-			return "noop";
-		}
-		if (state.status !== "active") {
-			this.notify(`Cannot pause a goal in state "${state.status}".`, "warning");
-			return "noop";
-		}
-		// Abort the current run; the final accounting pass for the aborted turn
-		// (if any) is handled by onTurnEnd via accountTerminalTurn.
-		const wasStreaming = ui.isStreaming();
-		if (wasStreaming) {
-			this.accountTerminalTurn = true;
+		this.resetRuntime();
+		if (ui.isStreaming() && ui.abort) {
 			ui.abort();
 		}
-		this.finalizeActivePeriod(state, this.now());
-		state.status = "paused";
-		this.commit(state, "Goal paused.", "info");
-		return "paused";
+		this.persist({ status: "cleared", clearedAt: this.now(), goalId: previousGoalId });
+		this.notify("Goal cleared.");
+		this.onStateChange?.();
+		return { status: "cleared", previousGoalId };
 	}
 
-	resume(_ui: GoalUI): GoalMutationResult {
+	pause(ui: GoalUI): GoalMutationOutcome {
 		const state = this.state;
 		if (!state) {
-			this.notify("No goal to resume.", "info");
-			return "noop";
+			const error = "No goal to pause.";
+			this.notify(error, "info");
+			return { status: "error", error };
+		}
+		if (state.status === "paused") {
+			const message = "Goal is already paused.";
+			this.notify(message, "info");
+			return { status: "unchanged", state: this.getState()!, message };
+		}
+		if (state.status !== "active") {
+			const error = `Cannot pause a goal in state "${state.status}".`;
+			this.notify(error, "warning");
+			return { status: "error", error };
+		}
+
+		const now = this.now();
+		const willAbort = ui.isStreaming() && Boolean(ui.abort);
+		this.flushActiveRunTime(state, now, willAbort);
+		if (willAbort) {
+			this.accountTerminalTurn = true;
+			ui.abort?.();
+		}
+		this.startKicked = false;
+		state.status = "paused";
+		state.revision++;
+		this.commit(state, "Goal paused.", "info");
+		return { status: "paused", state: this.getState(now)! };
+	}
+
+	resume(): GoalMutationOutcome {
+		const state = this.state;
+		if (!state) {
+			const error = "No goal to resume.";
+			this.notify(error, "info");
+			return { status: "error", error };
 		}
 		if (state.status === "active") {
-			this.notify("Goal is already active.", "info");
-			return "noop";
+			const message = "Goal is already active.";
+			return { status: "unchanged", state: this.getState()!, message };
 		}
 		if (state.status === "complete") {
-			this.notify("Goal is already complete.", "info");
-			return "noop";
+			const error = "Goal is already complete. Create a new goal with /goal <objective>.";
+			this.notify(error, "info");
+			return { status: "error", error };
 		}
+
 		state.status = "active";
-		state.activeSinceMs = this.now();
-		this.commit(state, "Goal resumed.", "info");
-		return "resumed";
-	}
-
-	edit(objective: string, _ui: GoalUI): GoalMutationResult {
-		const state = this.state;
-		if (!state) {
-			this.notify("No goal to edit. Create one with /goal <objective>.", "warning");
-			return "noop";
-		}
-		if (objective === state.objective) {
-			this.notify("Nothing to edit. Usage: /goal edit <objective>", "info");
-			return "noop";
-		}
-		state.objective = objective;
 		state.revision++;
-		this.commit(state, `Goal updated (objective "${objective}").`, "info");
-		return "changed";
+		delete state.blockedReason;
+		if (this.autoPausedNote && state.note === this.autoPausedNote) {
+			delete state.note;
+		}
+		this.autoPausedNote = undefined;
+		this.consecutiveIdleRounds = 0;
+		this.commit(state, "Goal resumed.", "info");
+		return { status: "resumed", state: this.getState()! };
 	}
 
-	complete(note: string | undefined, _ui: GoalUI): GoalMutationResult {
+	edit(objective: string): GoalMutationOutcome {
 		const state = this.state;
 		if (!state) {
-			this.notify("No goal to complete.", "warning");
-			return "noop";
+			const error = "No goal to edit. Create one with /goal <objective>.";
+			this.notify(error, "warning");
+			return { status: "error", error };
 		}
 		if (state.status === "complete") {
-			this.notify("Goal is already complete.", "info");
-			return "noop";
+			const error = "Cannot edit a completed goal. Create a new goal with /goal <objective>.";
+			this.notify(error, "warning");
+			return { status: "error", error };
+		}
+		const trimmed = objective.trim();
+		if (!trimmed) {
+			const error = "Goal objective cannot be empty.";
+			this.notify("Usage: /goal edit <objective>", "warning");
+			return { status: "error", error };
+		}
+		if (trimmed.length > MAX_GOAL_OBJECTIVE_CHARS) {
+			const error = `Goal objective must be at most ${MAX_GOAL_OBJECTIVE_CHARS} characters.`;
+			this.notify(error, "warning");
+			return { status: "error", error };
+		}
+		if (trimmed === state.objective) {
+			const message = "Goal objective is unchanged.";
+			this.notify(message, "info");
+			return { status: "unchanged", state: this.getState()!, message };
+		}
+
+		state.objective = trimmed;
+		state.revision++;
+		this.commit(state, `Goal updated: ${trimmed}`, "info");
+		return { status: "changed", state: this.getState()! };
+	}
+
+	complete(note?: string): GoalMutationOutcome {
+		const state = this.state;
+		if (!state) {
+			const error = "No goal is set.";
+			this.notify(error, "warning");
+			return { status: "error", error };
+		}
+		if (state.status === "complete") {
+			const message = "Goal is already complete.";
+			return { status: "unchanged", state: this.getState()!, message };
 		}
 		if (state.status !== "active") {
-			this.notify(`Cannot complete a goal in state "${state.status}".`, "warning");
-			return "noop";
+			const error = `Cannot mark goal complete while status is "${state.status}".`;
+			this.notify(error, "warning");
+			return { status: "error", error };
 		}
-		const wasActive = state.status === "active";
-		if (wasActive) {
-			this.finalizeActivePeriod(state, this.now());
-			this.accountTerminalTurn = true;
-		}
+
+		const now = this.now();
+		const running = this.runStartedAtMs !== null;
+		this.flushActiveRunTime(state, now, running);
+		this.accountTerminalTurn = running;
+		this.startKicked = false;
 		state.status = "complete";
-		state.completedAtMs = this.now();
-		state.note = note?.trim() || state.note;
+		state.completedAtMs = now;
+		delete state.blockedReason;
+		const trimmedNote = note?.trim();
+		if (trimmedNote) state.note = trimmedNote;
 		state.revision++;
-		this.commit(state, "Goal complete - objective achieved. Auto-continuation stopped.", "info");
-		return "changed";
+		this.commit(state, "Goal complete - auto-continuation stopped.", "info");
+		return { status: "changed", state: this.getState(now)! };
 	}
 
-	block(reason: string | undefined, _ui: GoalUI): GoalMutationResult {
+	block(reason?: string): GoalMutationOutcome {
 		const state = this.state;
 		if (!state) {
-			this.notify("No goal to block.", "warning");
-			return "noop";
+			const error = "No goal is set.";
+			this.notify(error, "warning");
+			return { status: "error", error };
 		}
 		if (state.status === "blocked") {
-			this.notify("Goal is already blocked.", "info");
-			return "noop";
+			const message = "Goal is already blocked.";
+			return { status: "unchanged", state: this.getState()!, message };
 		}
 		if (state.status !== "active") {
-			this.notify(`Cannot block a goal in state "${state.status}".`, "warning");
-			return "noop";
+			const error = `Cannot mark goal blocked while status is "${state.status}".`;
+			this.notify(error, "warning");
+			return { status: "error", error };
 		}
-		const wasActive = state.status === "active";
-		if (wasActive) {
-			this.finalizeActivePeriod(state, this.now());
-			this.accountTerminalTurn = true;
-		}
+
+		const now = this.now();
+		const running = this.runStartedAtMs !== null;
+		this.flushActiveRunTime(state, now, running);
+		this.accountTerminalTurn = running;
+		this.startKicked = false;
 		state.status = "blocked";
-		state.blockedReason = reason?.trim() || state.blockedReason;
+		const trimmedReason = reason?.trim();
+		if (trimmedReason) state.blockedReason = trimmedReason;
 		state.revision++;
 		this.commit(state, "Goal blocked - auto-continuation stopped.", "warning");
-		return "changed";
+		return { status: "changed", state: this.getState(now)! };
 	}
 
 	// =========================================================================
-	// Agent lifecycle accounting
+	// Agent lifecycle hooks
 	// =========================================================================
 
-	onAgentStart(): void {
-		// A new run started (user prompt or continuation): allow future settles
-		// to schedule the next continuation and close any stale mid-turn
-		// terminal accounting from an interrupted previous run.
-		this.continuationScheduled = false;
+	onUserPrompt(): void {
+		this.consecutiveIdleRounds = 0;
+	}
+
+	onAgentStart(now: number = this.now()): void {
+		this.startKicked = false;
 		this.accountTerminalTurn = false;
+		this.toolExecutedInRun = false;
+		this.runStartedAtMs = this.state?.status === "active" ? now : null;
+	}
+
+	onToolExecutionStart(toolName: string): void {
+		if (toolName !== "goal") {
+			this.toolExecutedInRun = true;
+		}
 	}
 
 	/**
-	 * Per-turn running-time accounting. Only counted while the goal is active,
-	 * so pre-goal and post-completion session time never lands in the goal.
+	 * Accrue active run time at turn boundaries in memory without spamming
+	 * session entries on every tool turn. Persists immediately only when closing
+	 * a terminal turn (complete/blocked/paused mid-turn).
 	 */
 	onTurnEnd(now: number = this.now()): void {
 		const state = this.state;
-		if (!state) return;
-
-		// Account the turn that flipped the goal to a terminal status
-		// (complete/blocked via a tool call before turn_end) so its time is not
-		// lost once the status is no longer active.
-		const shouldAccount = state.status === "active" || this.accountTerminalTurn;
-		if (!shouldAccount) return;
-
-		// Running time: accumulate the period since the previous turn end.
-		if (state.activeSinceMs !== undefined) {
-			state.timeUsedMs += Math.max(0, now - state.activeSinceMs);
-			state.activeSinceMs = state.status === "active" ? now : undefined;
+		if (!state) {
+			this.runStartedAtMs = null;
+			this.accountTerminalTurn = false;
+			return;
 		}
 
-		state.updatedAt = now;
-		this.accountTerminalTurn = false;
-		this.commit(state);
+		const shouldAccount = state.status === "active" || this.accountTerminalTurn;
+		if (!shouldAccount) {
+			this.runStartedAtMs = null;
+			return;
+		}
+
+		if (this.runStartedAtMs !== null) {
+			const delta = Math.max(0, now - this.runStartedAtMs);
+			if (delta > 0) {
+				state.timeUsedMs += delta;
+				this.timeDirty = true;
+			}
+			this.runStartedAtMs = state.status === "active" ? now : null;
+		}
+
+		if (this.accountTerminalTurn) {
+			this.accountTerminalTurn = false;
+			if (this.timeDirty) {
+				this.timeDirty = false;
+				state.updatedAt = now;
+				this.persist(cloneGoal(state));
+			}
+		}
+
+		this.onStateChange?.();
 	}
 
-	/**
-	 * Decide whether to schedule the next auto-continuation round.
-	 * Runs after the agent has fully settled: goal active, idle, no queued
-	 * messages, no abort, no duplicate scheduling, and no error from the last
-	 * assistant message.
-	 */
-	async onAgentSettled(opts: {
-		signalAborted: () => boolean;
-		idle: () => boolean;
-		hasPendingMessages: () => boolean;
-		lastAssistantHasError: () => boolean;
-	}): Promise<GoalSettleResult> {
+	/** Finalize any remaining active run time and persist once when an agent loop ends. */
+	onAgentEnd(now: number = this.now()): void {
 		const state = this.state;
-		if (!state || state.status !== "active") return "skipped";
-		if (opts.signalAborted()) return "skipped";
-		if (!opts.idle()) return "skipped";
-		if (opts.hasPendingMessages()) return "skipped";
-		if (this.continuationScheduled) return "skipped";
-		if (opts.lastAssistantHasError()) return "skipped";
+		if (state && this.runStartedAtMs !== null && (state.status === "active" || this.accountTerminalTurn)) {
+			const delta = Math.max(0, now - this.runStartedAtMs);
+			if (delta > 0) {
+				state.timeUsedMs += delta;
+				this.timeDirty = true;
+			}
+		}
+		this.runStartedAtMs = null;
+		this.accountTerminalTurn = false;
 
-		// Brief delay so a user prompt submitted right after settling wins.
-		await this.delay(GOAL_CONTINUATION_DELAY_MS);
-
-		// Re-check everything - the user may have paused/cleared/replaced the
-		// goal or submitted new input while we waited.
-		const current = this.state;
-		if (!current || current.status !== "active") return "skipped";
-		if (current.goalId !== state.goalId || current.revision !== state.revision) return "skipped";
-		if (opts.signalAborted()) return "skipped";
-		if (!opts.idle()) return "skipped";
-		if (opts.hasPendingMessages()) return "skipped";
-
-		this.continuationScheduled = true;
-		this.sendContinuation(buildContinuationContent(current), {
-			goalId: current.goalId,
-			revision: current.revision,
-		});
-		return "continued";
+		if (state && this.timeDirty) {
+			this.timeDirty = false;
+			state.updatedAt = now;
+			this.persist(cloneGoal(state));
+			this.onStateChange?.();
+		}
 	}
 
 	/**
-	 * Start the first goal round immediately when the host is idle and nothing
-	 * else is queued. Used by commands (`/goal <objective>`, `/goal resume`, …)
-	 * so a goal created/resumed while the agent sits idle actually starts
-	 * working right away instead of waiting for a settle event. When the agent
-	 * is streaming or messages are pending, this returns "skipped" and the
-	 * regular `agent_settled` path schedules the continuation later.
+	 * Decide at the `agent_before_settle` boundary whether to append a
+	 * continuation message and keep the session loop running.
+	 *
+	 * Aborted runs never reach `agent_before_settle`; errored outcomes and runs
+	 * with queued messages or existing continuations are skipped. Repeated rounds
+	 * with no non-goal tool calls auto-pause the goal to prevent runaway loops.
+	 */
+	onBeforeSettle(opts: {
+		outcome: "completed" | "aborted" | "error";
+		hasPendingMessages: boolean;
+		alreadyContinuing: boolean;
+		includeObjective: boolean;
+	}): GoalBeforeSettleDecision {
+		const state = this.state;
+		if (!state || state.status !== "active") return { continue: false };
+		if (this.replacing) return { continue: false };
+		if (opts.outcome !== "completed") return { continue: false };
+		if (opts.hasPendingMessages || opts.alreadyContinuing) return { continue: false };
+
+		if (this.toolExecutedInRun) {
+			this.consecutiveIdleRounds = 0;
+		} else {
+			this.consecutiveIdleRounds++;
+			if (this.consecutiveIdleRounds >= this.maxConsecutiveIdleRounds) {
+				const reason = `Auto-paused after ${this.consecutiveIdleRounds} consecutive rounds without tool calls.`;
+				this.autoPausedNote = reason;
+				state.status = "paused";
+				state.note = reason;
+				state.revision++;
+				this.commit(
+					state,
+					`Goal auto-paused after ${this.consecutiveIdleRounds} rounds with no tool activity. Run /goal resume to continue.`,
+					"warning",
+				);
+				return { continue: false, autoPaused: true };
+			}
+		}
+
+		const now = this.now();
+		state.rounds++;
+		state.updatedAt = now;
+		this.timeDirty = false;
+		this.persist(cloneGoal(state));
+		this.onStateChange?.();
+
+		const elapsed = this.elapsedTimeMs(now);
+		const details: GoalContinuationDetails = {
+			goalId: state.goalId,
+			revision: state.revision,
+			round: state.rounds,
+			timeUsedMs: elapsed,
+			objective: state.objective,
+			kind: "continue",
+		};
+		const content = buildContinuationContent(state, {
+			timeUsedMs: elapsed,
+			round: state.rounds,
+			includeObjective: opts.includeObjective,
+			kind: "continue",
+		});
+		return { continue: true, content, details };
+	}
+
+	/**
+	 * Kick off the first round immediately when the host is idle and nothing is
+	 * queued. Used by `/goal <objective>` and `/goal resume`.
 	 */
 	startIfIdle(opts: {
 		signalAborted: () => boolean;
 		idle: () => boolean;
 		hasPendingMessages: () => boolean;
-	}): GoalSettleResult {
+	}): GoalStartResult {
 		const state = this.state;
 		if (!state || state.status !== "active") return "skipped";
+		if (this.replacing || this.startKicked) return "skipped";
 		if (opts.signalAborted()) return "skipped";
 		if (!opts.idle()) return "skipped";
 		if (opts.hasPendingMessages()) return "skipped";
-		if (this.continuationScheduled) return "skipped";
 
-		this.continuationScheduled = true;
-		this.sendContinuation(buildContinuationContent(state), {
+		const now = this.now();
+		this.startKicked = true;
+		state.rounds++;
+		state.updatedAt = now;
+		this.timeDirty = false;
+		this.persist(cloneGoal(state));
+		this.onStateChange?.();
+
+		const elapsed = this.elapsedTimeMs(now);
+		const details: GoalContinuationDetails = {
 			goalId: state.goalId,
 			revision: state.revision,
-		});
+			round: state.rounds,
+			timeUsedMs: elapsed,
+			objective: state.objective,
+			kind: "start",
+		};
+		this.sendContinuation(
+			buildContinuationContent(state, {
+				timeUsedMs: elapsed,
+				round: state.rounds,
+				includeObjective: true,
+				kind: "start",
+			}),
+			details,
+		);
 		return "continued";
 	}
 
@@ -417,37 +569,34 @@ export class GoalManager {
 	// Internals
 	// =========================================================================
 
-	private elapsedTimeMs(state: GoalState, now: number): number {
-		let total = state.timeUsedMs;
-		if (state.status === "active" && state.activeSinceMs !== undefined) {
-			total += Math.max(0, now - state.activeSinceMs);
-		}
-		return total;
+	private resetRuntime(): void {
+		this.runStartedAtMs = null;
+		this.timeDirty = false;
+		this.accountTerminalTurn = false;
+		this.startKicked = false;
+		this.replacing = false;
+		this.toolExecutedInRun = false;
+		this.consecutiveIdleRounds = 0;
 	}
 
-	private finalizeActivePeriod(state: GoalState, now: number): void {
-		if (state.status === "active" && state.activeSinceMs !== undefined) {
-			state.timeUsedMs += Math.max(0, now - state.activeSinceMs);
-			state.activeSinceMs = now;
+	private flushActiveRunTime(state: GoalState, now: number, keepRunningForTurnEnd: boolean): void {
+		if (this.runStartedAtMs !== null) {
+			const delta = Math.max(0, now - this.runStartedAtMs);
+			if (delta > 0) {
+				state.timeUsedMs += delta;
+			}
+			this.runStartedAtMs = keepRunningForTurnEnd ? now : null;
 		}
+		this.timeDirty = false;
 	}
 
 	private commit(state: GoalState, message?: string, type: "info" | "warning" | "error" = "info"): void {
 		state.updatedAt = this.now();
-		this.persist(state);
+		this.timeDirty = false;
+		this.persist(cloneGoal(state));
 		if (message) {
 			this.notify(message, type);
 		}
 		this.onStateChange?.();
 	}
-}
-
-/** True when the most recent assistant message on the branch ended in an error. */
-export function lastAssistantMessageHasError(entries: readonly SessionEntry[]): boolean {
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		return (entry.message as AssistantMessage).stopReason === "error";
-	}
-	return false;
 }
