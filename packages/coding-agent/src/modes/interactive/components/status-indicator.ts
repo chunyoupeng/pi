@@ -80,6 +80,10 @@ export function formatElapsedTime(totalSeconds: number): string {
 	return `${hours > 0 ? `${hours}h ` : ""}${minutes > 0 ? `${minutes}m ` : ""}${remainingSeconds}s`;
 }
 
+export function formatTtft(totalSeconds: number): string {
+	return formatElapsedTime(Math.max(1, Math.round(totalSeconds)));
+}
+
 export class StatusIndicator extends Loader {
 	readonly kind: StatusIndicatorKind;
 

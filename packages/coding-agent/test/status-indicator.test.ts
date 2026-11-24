@@ -7,6 +7,7 @@ import {
 	CompactionStatusIndicator,
 	DEFAULT_WORKING_MESSAGES,
 	formatElapsedTime,
+	formatTtft,
 	IdleStatus,
 	pickWorkingMessage,
 	RetryStatusIndicator,
@@ -39,6 +40,15 @@ describe("status indicators", () => {
 		expect(formatElapsedTime(59.9)).toBe("59s");
 		expect(formatElapsedTime(80)).toBe("1m 20s");
 		expect(formatElapsedTime(7507)).toBe("2h 5m 7s");
+	});
+
+	it("formats TTFT to whole seconds with sub-second values clamped to 1s", () => {
+		expect(formatTtft(0)).toBe("1s");
+		expect(formatTtft(0.2)).toBe("1s");
+		expect(formatTtft(0.8)).toBe("1s");
+		expect(formatTtft(3.24)).toBe("3s");
+		expect(formatTtft(59.6)).toBe("1m 0s");
+		expect(formatTtft(72.4)).toBe("1m 12s");
 	});
 
 	it("animates the default working icon", () => {

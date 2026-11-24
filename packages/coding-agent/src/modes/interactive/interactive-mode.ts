@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
+import type { AssistantMessageEvent, AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import {
 	type AssistantMessage,
 	type ImageContent,
@@ -183,6 +183,7 @@ import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	formatElapsedTime,
+	formatTtft,
 	IdleStatus,
 	pickCookedIcon,
 	pickCookedMessage,
@@ -647,6 +648,9 @@ export class InteractiveMode {
 	private readonly entriesRenderedByBoundaryCompaction = new Set<string>();
 	private streamingMessage: AssistantMessage | undefined = undefined;
 	private agentStartedAt: number | undefined = undefined;
+	private agentFirstTokenAt: number | undefined = undefined;
+	private assistantFirstTokenAt: number | undefined = undefined;
+	private completedAgentGenerationMs = 0;
 	private completedAgentOutputTokens = 0;
 
 	// Tool execution tracking: toolCallId -> component handle
@@ -3733,6 +3737,19 @@ export class InteractiveMode {
 		});
 	}
 
+	private isFirstOutputTokenEvent(event: AssistantMessageEvent): boolean {
+		switch (event.type) {
+			case "text_delta":
+			case "thinking_delta":
+			case "toolcall_delta":
+				return event.delta.length > 0;
+			case "toolcall_start":
+				return true;
+			default:
+				return false;
+		}
+	}
+
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -3745,6 +3762,9 @@ export class InteractiveMode {
 			case "agent_start":
 				this.defaultWorkingMessage = pickWorkingMessage();
 				this.agentStartedAt = Date.now();
+				this.agentFirstTokenAt = undefined;
+				this.assistantFirstTokenAt = undefined;
+				this.completedAgentGenerationMs = 0;
 				this.completedAgentOutputTokens = 0;
 				this.pendingTools.clear();
 				this.addToolOutputDividerBeforeNextAssistant = false;
@@ -3841,6 +3861,7 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					this.assistantFirstTokenAt = undefined;
 					this.streamingComponent = new AssistantMessageComponent(
 						undefined,
 						this.hideThinkingBlock,
@@ -3860,6 +3881,17 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
+				if (
+					event.message.role === "assistant" &&
+					this.assistantFirstTokenAt === undefined &&
+					this.isFirstOutputTokenEvent(event.assistantMessageEvent)
+				) {
+					const now = Date.now();
+					this.assistantFirstTokenAt = now;
+					if (this.agentFirstTokenAt === undefined) {
+						this.agentFirstTokenAt = now;
+					}
+				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage, true);
@@ -3900,6 +3932,10 @@ export class InteractiveMode {
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (event.message.role === "assistant") {
+					if (this.assistantFirstTokenAt !== undefined) {
+						this.completedAgentGenerationMs += Math.max(0, Date.now() - this.assistantFirstTokenAt);
+						this.assistantFirstTokenAt = undefined;
+					}
 					this.completedAgentOutputTokens += estimateAssistantOutputTokens(event.message);
 					this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens);
 				}
@@ -4030,10 +4066,19 @@ export class InteractiveMode {
 					const elapsedMs = Date.now() - this.agentStartedAt;
 					if (elapsedMs > 0) {
 						const elapsedSeconds = elapsedMs / 1000;
-						const tokensPerSecond = this.completedAgentOutputTokens / elapsedSeconds;
-						this.showStatus(
-							`${pickCookedIcon()} ${pickCookedMessage()} ${formatElapsedTime(elapsedSeconds)} · ${tokensPerSecond.toFixed(1)} tok/s`,
-						);
+						const ttftSeconds =
+							this.agentFirstTokenAt !== undefined
+								? Math.max(0, this.agentFirstTokenAt - this.agentStartedAt) / 1000
+								: undefined;
+						const generationMs =
+							this.completedAgentGenerationMs >= 100 ? this.completedAgentGenerationMs : elapsedMs;
+						const tokensPerSecond = this.completedAgentOutputTokens / (generationMs / 1000);
+						const parts = [formatElapsedTime(elapsedSeconds)];
+						if (ttftSeconds !== undefined) {
+							parts.push(formatTtft(ttftSeconds));
+						}
+						parts.push(`${tokensPerSecond.toFixed(1)} tok/s`);
+						this.showStatus(`${pickCookedIcon()} ${pickCookedMessage()} · ${parts.join(" · ")}`);
 					}
 				}
 				if (!event.willRetry) {
@@ -4052,6 +4097,9 @@ export class InteractiveMode {
 					this.turnTools.clear();
 				}
 				this.agentStartedAt = undefined;
+				this.agentFirstTokenAt = undefined;
+				this.assistantFirstTokenAt = undefined;
+				this.completedAgentGenerationMs = 0;
 				this.pendingTools.clear();
 
 				this.ui.requestRender();

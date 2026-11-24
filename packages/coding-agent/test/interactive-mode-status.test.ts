@@ -947,3 +947,179 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).not.toContain("[Skills]");
 	});
 });
+
+describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
+	function createHandleEventHarness() {
+		const statuses: string[] = [];
+		const fakeThis: Record<string, unknown> = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			programStatus: { handleEvent: vi.fn() },
+			pendingTools: new Map(),
+			turnTools: new Set(),
+			addToolOutputDividerBeforeNextAssistant: false,
+			defaultEditor: { onEscape: undefined },
+			retryEscapeHandler: undefined,
+			chatContainer: new Container(),
+			ui: {
+				requestRender: vi.fn(),
+				terminal: { setProgress: vi.fn() },
+			},
+			settingsManager: {
+				getShowTerminalProgress: () => false,
+				getCollapseToolOutput: () => false,
+			},
+			toolOutputExpanded: false,
+			hideThinkingBlock: false,
+			hiddenThinkingLabel: "Thinking...",
+			outputPad: 1,
+			getMarkdownThemeWithSettings: () => ({}),
+			getMarkdownTransformers: () => [],
+			updateLiveOutputTokens: vi.fn(),
+			updateWorkingOutputTokenLabel: vi.fn(),
+			clearLiveOutputTokens: vi.fn(),
+			clearStatusIndicator: vi.fn(),
+			hasVisibleAssistantText: () => true,
+			addToolOutputDividerBefore: vi.fn(),
+			maybeShowThinkingDropNotice: vi.fn(),
+			maybeShowCacheMissNotice: vi.fn(),
+			showStatus: (message: string) => statuses.push(message),
+			agentStartedAt: undefined,
+			agentFirstTokenAt: undefined,
+			assistantFirstTokenAt: undefined,
+			completedAgentGenerationMs: 0,
+			completedAgentOutputTokens: 0,
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			isFirstOutputTokenEvent: (InteractiveMode as any).prototype.isFirstOutputTokenEvent,
+		};
+		const handleEvent = (event: unknown) => (InteractiveMode as any).prototype.handleEvent.call(fakeThis, event);
+		return { fakeThis, statuses, handleEvent };
+	}
+
+	function makeAssistantMessage(output: number) {
+		return {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "done" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-test",
+			usage: {
+				input: 100,
+				output,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 100 + output,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop" as const,
+			timestamp: Date.now(),
+		};
+	}
+
+	test("reports total time, TTFT, and decode TPS while ignoring empty usage-sync deltas", async () => {
+		initTheme("dark");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+		try {
+			const { statuses, handleEvent } = createHandleEventHarness();
+			const partial = makeAssistantMessage(0);
+
+			await handleEvent({ type: "agent_start" });
+			await handleEvent({ type: "message_start", message: partial });
+			vi.advanceTimersByTime(1000);
+			// Empty delta (e.g. usage sync) must not trigger TTFT.
+			await handleEvent({
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "", partial },
+			});
+			vi.advanceTimersByTime(2200);
+			// Real first output token at t = 3.2s.
+			await handleEvent({
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "plan", partial },
+			});
+			vi.advanceTimersByTime(108_800);
+			await handleEvent({ type: "message_end", message: makeAssistantMessage(3850) });
+			await handleEvent({ type: "agent_end", messages: [] });
+
+			expect(statuses).toHaveLength(1);
+			expect(statuses[0]).toMatch(/· 1m 52s · 3s · 35\.4 tok\/s$/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("excludes tool wait gaps from multi-turn decode TPS", async () => {
+		initTheme("dark");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+		try {
+			const { statuses, handleEvent } = createHandleEventHarness();
+			const partial = makeAssistantMessage(0);
+
+			await handleEvent({ type: "agent_start" });
+
+			// Turn 1: TTFT 2.0s, decode 2.0s, 200 tokens.
+			await handleEvent({ type: "message_start", message: partial });
+			vi.advanceTimersByTime(2000);
+			await handleEvent({
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial },
+			});
+			vi.advanceTimersByTime(2000);
+			await handleEvent({ type: "message_end", message: makeAssistantMessage(200) });
+
+			// Tool execution takes 60s.
+			vi.advanceTimersByTime(60_000);
+
+			// Turn 2: TTFT 1.5s, decode 8.0s, 800 tokens.
+			await handleEvent({ type: "message_start", message: partial });
+			vi.advanceTimersByTime(1500);
+			await handleEvent({
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "ok", partial },
+			});
+			vi.advanceTimersByTime(8000);
+			await handleEvent({ type: "message_end", message: makeAssistantMessage(800) });
+			await handleEvent({ type: "agent_end", messages: [] });
+
+			expect(statuses).toHaveLength(1);
+			// Total 73.5s -> 1m 13s, initial TTFT 2s, pure decode 1000 / (2s + 8s) = 100.0 tok/s.
+			expect(statuses[0]).toMatch(/· 1m 13s · 2s · 100\.0 tok\/s$/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("falls back to total elapsed time for sub-100ms single-chunk responses", async () => {
+		initTheme("dark");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+		try {
+			const { statuses, handleEvent } = createHandleEventHarness();
+			const partial = makeAssistantMessage(0);
+
+			await handleEvent({ type: "agent_start" });
+			await handleEvent({ type: "message_start", message: partial });
+			vi.advanceTimersByTime(2000);
+			await handleEvent({
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Hi", partial },
+			});
+			vi.advanceTimersByTime(2);
+			await handleEvent({ type: "message_end", message: makeAssistantMessage(20) });
+			await handleEvent({ type: "agent_end", messages: [] });
+
+			expect(statuses).toHaveLength(1);
+			expect(statuses[0]).toMatch(/· 2s · 2s · 10\.0 tok\/s$/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
