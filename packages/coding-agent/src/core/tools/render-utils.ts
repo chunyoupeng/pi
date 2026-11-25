@@ -3,7 +3,7 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
 import { keyText } from "../../modes/interactive/components/keybinding-hints.ts";
 import { foldToVisualLines, type VisualTruncateResult } from "../../modes/interactive/components/visual-truncate.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import type { Theme, ThemeColor } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath, shortenHomePath } from "../../utils/paths.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
@@ -182,12 +182,12 @@ export function renderToolPath(
 	rawPath: string | null,
 	theme: Theme,
 	cwd: string,
-	options?: { emptyFallback?: string },
+	options?: { emptyFallback?: string; color?: ThemeColor },
 ): string {
 	if (rawPath === null) return invalidArgText(theme);
 	const value = rawPath || options?.emptyFallback;
 	if (!value) return theme.fg("toolOutput", "...");
-	return linkPath(theme.fg("accent", shortenPath(value)), value, cwd);
+	return linkPath(theme.fg(options?.color ?? "accent", shortenPath(value)), value, cwd);
 }
 
 /** Claude-style tool call header: `Name(args)`. */

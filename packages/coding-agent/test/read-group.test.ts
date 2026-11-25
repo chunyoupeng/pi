@@ -74,6 +74,8 @@ type FakeInteractiveContext = {
 	addToolOutputDividerBefore: (component: unknown) => void;
 	clearStatusIndicator(kind?: string): void;
 	clearLiveOutputTokens(): void;
+	startRequestInputPhase(): void;
+	isFirstOutputTokenEvent(event: unknown): boolean;
 	updateLiveOutputTokens(message: AssistantMessage): void;
 	updateWorkingOutputTokenLabel(tokens: number): void;
 	maybeShowThinkingDropNotice(message: AssistantMessage): void;
@@ -154,6 +156,8 @@ function createFakeInteractiveContext(options?: {
 		addToolOutputDividerBefore: proto.addToolOutputDividerBefore,
 		clearStatusIndicator: vi.fn(),
 		clearLiveOutputTokens: vi.fn(),
+		startRequestInputPhase: vi.fn(),
+		isFirstOutputTokenEvent: () => false,
 		updateLiveOutputTokens: vi.fn(),
 		updateWorkingOutputTokenLabel: vi.fn(),
 		maybeShowThinkingDropNotice: vi.fn(),
@@ -238,7 +242,13 @@ describe("ReadGroupComponent", () => {
 		expect(doneOutput).toContain("└─ src/b.ts");
 		expect(doneOutput).not.toContain("FIRST_FILE_BODY");
 		expect(doneOutput).not.toContain("SECOND_FILE_BODY");
-		expect(group.render(120).find((line) => stripAnsi(line).includes("⏺"))).toContain(theme.fg("success", "⏺"));
+		const renderedLines = group.render(120);
+		expect(renderedLines.find((line) => stripAnsi(line).includes("⏺"))).toContain(theme.fg("success", "⏺"));
+		const firstFileLine = renderedLines.find((line) => stripAnsi(line).includes("src/a.ts:1-20"));
+		expect(firstFileLine).toContain(theme.fg("muted", "src/a.ts"));
+		expect(firstFileLine).toContain(theme.fg("muted", ":1-20"));
+		expect(firstFileLine).not.toContain(theme.getFgAnsi("accent"));
+		expect(firstFileLine).not.toContain(theme.getFgAnsi("warning"));
 
 		group.dispose();
 	});

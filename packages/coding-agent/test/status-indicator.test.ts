@@ -31,10 +31,11 @@ describe("status indicators", () => {
 		expect(lines).toEqual([" ".repeat(20), " ".repeat(20)]);
 	});
 
-	it("picks a short working message for each run", () => {
+	it("picks a working message of at least 8 characters for each run", () => {
 		expect(pickWorkingMessage(() => 0)).toBe(DEFAULT_WORKING_MESSAGES[0]);
 		expect(pickWorkingMessage(() => 0.999)).toBe(DEFAULT_WORKING_MESSAGES.at(-1));
 		expect(DEFAULT_WORKING_MESSAGES.every((message) => !message.includes(" "))).toBe(true);
+		expect(DEFAULT_WORKING_MESSAGES.every((message) => Array.from(message).length >= 8)).toBe(true);
 	});
 
 	it("formats elapsed time with compact hour, minute, and second units", () => {

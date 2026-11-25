@@ -20,19 +20,20 @@ export type StatusIndicatorKind = "working" | "retry" | "compaction" | "branchSu
 
 export const DEFAULT_WORKING_MESSAGES = [
 	"Pondering",
-	"Weaving",
-	"Seeking",
 	"Réflexion",
 	"Pensando",
 	"Cogitans",
 	"Meditans",
-	"Aether",
-	"Noctis",
-	"Arcana",
-	"Satori",
+	"Laborans",
+	"Scrutans",
+	"Elaborans",
+	"Fabricans",
+	"Speculans",
+	"Deliberans",
+	"Perpendens",
+	"Contemplans",
 	"Aletheia",
 	"Thinking",
-	"Running",
 ] as const;
 
 const DEFAULT_WORKING_FRAMES = ["✦", "✧", "⋆", "·", "⋆", "✧"] as const;

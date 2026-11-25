@@ -236,8 +236,8 @@ export class ReadGroupComponent extends Container {
 
 	private formatEntryPath(entry: ReadGroupEntry): string {
 		const rawPath = str(entry.args?.file_path ?? entry.args?.path);
-		const pathDisplay = renderToolPath(rawPath, theme, this.cwd);
-		const range = styledReadLineRange(entry.args, theme);
+		const pathDisplay = renderToolPath(rawPath, theme, this.cwd, { color: "muted" });
+		const range = styledReadLineRange(entry.args, theme, "muted");
 		let text = `${pathDisplay}${range}`;
 		if (!this.expanded && entry.result?.isError) {
 			const firstErrorLine = getRenderedTextOutput(entry.result, this.showImages)
