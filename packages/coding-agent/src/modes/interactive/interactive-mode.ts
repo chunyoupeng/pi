@@ -75,7 +75,7 @@ import {
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
-import { calculateContextTokens } from "../../core/compaction/compaction.ts";
+import { calculateContextTokens, estimateContextTokens } from "../../core/compaction/compaction.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
@@ -188,7 +188,6 @@ import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
 	formatElapsedTime,
-	formatTtft,
 	IdleStatus,
 	pickCookedIcon,
 	pickCookedMessage,
@@ -696,10 +695,11 @@ export class InteractiveMode {
 	private readonly entriesRenderedByBoundaryCompaction = new Set<string>();
 	private streamingMessage: AssistantMessage | undefined = undefined;
 	private agentStartedAt: number | undefined = undefined;
-	private agentFirstTokenAt: number | undefined = undefined;
 	private assistantFirstTokenAt: number | undefined = undefined;
 	private completedAgentGenerationMs = 0;
 	private completedAgentOutputTokens = 0;
+	// Estimated prompt size of the current request, set until its first output token arrives.
+	private requestInputTokens: number | undefined = undefined;
 
 	// Tool execution tracking: toolCallId -> component handle
 	private pendingTools = new Map<string, ToolCallHandle>();
@@ -2760,17 +2760,25 @@ export class InteractiveMode {
 			this.isAssistantThinking,
 			this.session?.routedModel?.thinkingLevel ?? this.session?.thinkingLevel,
 		);
+		const [shownTokens, direction] =
+			this.requestInputTokens === undefined ? [tokens, "down" as const] : [this.requestInputTokens, "up" as const];
 		if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
 			this.activeStatusIndicator.setMessage(message);
 			this.activeStatusIndicator.setDetail(detail);
-			this.activeStatusIndicator.setProgress(this.agentStartedAt, tokens);
+			this.activeStatusIndicator.setProgress(this.agentStartedAt, shownTokens, direction);
 		} else if (this.session.isStreaming && this.workingVisible) {
 			this.showWorkingStatusIndicator();
 			if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
 				this.activeStatusIndicator.setDetail(detail);
-				this.activeStatusIndicator.setProgress(this.agentStartedAt, tokens);
+				this.activeStatusIndicator.setProgress(this.agentStartedAt, shownTokens, direction);
 			}
 		}
+	}
+
+	/** Enter the upload phase: the next request carries the whole current context as its prompt. */
+	private startRequestInputPhase(): void {
+		this.requestInputTokens = estimateContextTokens(this.session.messages).tokens;
+		this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens);
 	}
 
 	private updateLiveOutputTokens(message: AssistantMessage): void {
@@ -3831,10 +3839,10 @@ export class InteractiveMode {
 				this.defaultWorkingMessage = pickWorkingMessage();
 				this.isAssistantThinking = false;
 				this.agentStartedAt = Date.now();
-				this.agentFirstTokenAt = undefined;
 				this.assistantFirstTokenAt = undefined;
 				this.completedAgentGenerationMs = 0;
 				this.completedAgentOutputTokens = 0;
+				this.requestInputTokens = undefined;
 				this.pendingTools.clear();
 				this.addToolOutputDividerBeforeNextAssistant = false;
 				// Restore main escape handler if retry handler is still active
@@ -3860,6 +3868,7 @@ export class InteractiveMode {
 				} else {
 					this.clearStatusIndicator();
 				}
+				this.startRequestInputPhase();
 				this.ui.requestRender();
 				break;
 
@@ -3953,6 +3962,8 @@ export class InteractiveMode {
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
+					// Prompts and steering messages queued after turn_start are in the context by now.
+					this.startRequestInputPhase();
 					this.updateLiveOutputTokens(this.streamingMessage);
 					this.ui.requestRender();
 				}
@@ -3964,11 +3975,8 @@ export class InteractiveMode {
 					this.assistantFirstTokenAt === undefined &&
 					this.isFirstOutputTokenEvent(event.assistantMessageEvent)
 				) {
-					const now = Date.now();
-					this.assistantFirstTokenAt = now;
-					if (this.agentFirstTokenAt === undefined) {
-						this.agentFirstTokenAt = now;
-					}
+					this.assistantFirstTokenAt = Date.now();
+					this.requestInputTokens = undefined;
 				}
 				if (event.message.role === "assistant") {
 					const nextThinking = nextAssistantThinkingState(this.isAssistantThinking, event.assistantMessageEvent);
@@ -4031,6 +4039,7 @@ export class InteractiveMode {
 						this.assistantFirstTokenAt = undefined;
 					}
 					this.completedAgentOutputTokens += estimateAssistantOutputTokens(event.message);
+					this.requestInputTokens = undefined;
 					this.updateWorkingOutputTokenLabel(this.completedAgentOutputTokens);
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
@@ -4167,19 +4176,12 @@ export class InteractiveMode {
 					const elapsedMs = Date.now() - this.agentStartedAt;
 					if (elapsedMs > 0) {
 						const elapsedSeconds = elapsedMs / 1000;
-						const ttftSeconds =
-							this.agentFirstTokenAt !== undefined
-								? Math.max(0, this.agentFirstTokenAt - this.agentStartedAt) / 1000
-								: undefined;
 						const generationMs =
 							this.completedAgentGenerationMs >= 100 ? this.completedAgentGenerationMs : elapsedMs;
 						const tokensPerSecond = this.completedAgentOutputTokens / (generationMs / 1000);
-						const parts = [formatElapsedTime(elapsedSeconds)];
-						if (ttftSeconds !== undefined) {
-							parts.push(formatTtft(ttftSeconds));
-						}
-						parts.push(`${tokensPerSecond.toFixed(1)} tok/s`);
-						this.showStatus(`${pickCookedIcon()} ${pickCookedMessage()} · ${parts.join(" · ")}`);
+						this.showStatus(
+							`${pickCookedIcon()} ${pickCookedMessage()} · ${formatElapsedTime(elapsedSeconds)} · ${tokensPerSecond.toFixed(1)} tok/s`,
+						);
 					}
 				}
 				if (!event.willRetry) {
@@ -4198,7 +4200,6 @@ export class InteractiveMode {
 					this.turnTools.clear();
 				}
 				this.agentStartedAt = undefined;
-				this.agentFirstTokenAt = undefined;
 				this.assistantFirstTokenAt = undefined;
 				this.completedAgentGenerationMs = 0;
 				this.pendingTools.clear();

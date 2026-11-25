@@ -5,12 +5,10 @@ import { CustomEditor } from "../src/modes/interactive/components/custom-editor.
 import {
 	BranchSummaryStatusIndicator,
 	CompactionStatusIndicator,
-	computeShimmerBreath,
 	computeShimmerCenter,
-	computeShimmerHalfPeriodMs,
+	computeShimmerSweepMs,
 	DEFAULT_WORKING_MESSAGES,
 	formatElapsedTime,
-	formatTtft,
 	IdleStatus,
 	pickWorkingMessage,
 	RetryStatusIndicator,
@@ -46,15 +44,6 @@ describe("status indicators", () => {
 		expect(formatElapsedTime(7507)).toBe("2h 5m 7s");
 	});
 
-	it("formats TTFT to whole seconds with sub-second values clamped to 1s", () => {
-		expect(formatTtft(0)).toBe("1s");
-		expect(formatTtft(0.2)).toBe("1s");
-		expect(formatTtft(0.8)).toBe("1s");
-		expect(formatTtft(3.24)).toBe("3s");
-		expect(formatTtft(59.6)).toBe("1m 0s");
-		expect(formatTtft(72.4)).toBe("1m 12s");
-	});
-
 	it("animates the default working icon", () => {
 		initTheme("dark");
 		vi.useFakeTimers();
@@ -75,30 +64,64 @@ describe("status indicators", () => {
 		const tui = { requestRender: vi.fn() } as unknown as TUI;
 		const indicator = new WorkingStatusIndicator(tui, "Working...", undefined, undefined, {
 			startedAt: Date.now(),
-			outputTokens: 1234,
+			tokens: 1234,
+			direction: "down",
 		});
 
-		expect(stripAnsi(indicator.render(80).join("\n"))).toContain("Working... (0s · 1.2k tokens)");
+		expect(stripAnsi(indicator.render(80).join("\n"))).toContain("Working... (0s · ↓ 1.2k tokens)");
 		vi.advanceTimersByTime(3000);
-		expect(stripAnsi(indicator.render(80).join("\n"))).toContain("Working... (3s · 1.2k tokens)");
+		expect(stripAnsi(indicator.render(80).join("\n"))).toContain("Working... (3s · ↓ 1.2k tokens)");
 
 		indicator.setDetail("still thinking with high effort");
 		const fullWithDetail = indicator.render(100)[1]!;
-		expect(stripAnsi(fullWithDetail)).toContain("Working... (3s · 1.2k tokens · still thinking with high effort)");
-		// Shimmer sweeps across the entire text including the parenthetical progress and thinking detail.
-		const suffixStart = fullWithDetail.indexOf("(");
-		expect(suffixStart).toBeGreaterThan(0);
-		const suffixShades = new Set(fullWithDetail.slice(suffixStart).match(/\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m/g) ?? []);
-		expect(suffixShades.size).toBeGreaterThan(2);
+		expect(stripAnsi(fullWithDetail)).toContain("Working... (3s · ↓ 1.2k tokens · still thinking with high effort)");
+		// Only the label shimmers; the progress stays static dim text while the thinking detail breathes.
+		expect(fullWithDetail).toContain(theme.fg("dim", " (3s · ↓ 1.2k tokens · "));
+		const detailShade = (line: string) => /(\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m)still thinking/.exec(line)?.[1];
+		// 3s in, the 2s breath is at its crest; one second later it is at its trough.
+		const crestShade = detailShade(fullWithDetail);
+		vi.advanceTimersByTime(1000);
+		const troughShade = detailShade(indicator.render(100)[1]!);
+		expect(crestShade).toBeDefined();
+		expect(troughShade).toBeDefined();
+		expect(troughShade).not.toBe(crestShade);
+		expect(stripAnsi(indicator.render(100)[1]!)).toContain("(4s · ↓ 1.2k tokens · still thinking with high effort)");
 
 		indicator.setDetail(undefined);
-		expect(stripAnsi(indicator.render(100).join("\n"))).toContain("Working... (3s · 1.2k tokens)");
+		expect(stripAnsi(indicator.render(100).join("\n"))).toContain("Working... (4s · ↓ 1.2k tokens)");
 		expect(stripAnsi(indicator.render(100).join("\n"))).not.toContain("still thinking");
 
 		const callsBeforeDispose = vi.mocked(tui.requestRender).mock.calls.length;
 		indicator.dispose();
 		vi.advanceTimersByTime(2000);
 		expect(tui.requestRender).toHaveBeenCalledTimes(callsBeforeDispose);
+	});
+
+	it("rolls the token count toward its target and snaps when the phase changes", () => {
+		initTheme("dark");
+		vi.useFakeTimers();
+		const tui = { requestRender: vi.fn() } as unknown as TUI;
+		const indicator = new WorkingStatusIndicator(tui, "Working", undefined, undefined, {
+			startedAt: Date.now(),
+			tokens: 52_000,
+			direction: "up",
+		});
+		const label = () => stripAnsi(indicator.render(80)[1]!);
+		expect(label()).toContain("↑ 52k tokens");
+
+		// First output token: switch to the download phase without counting down from the prompt size.
+		indicator.setProgress(Date.now(), 100, "down");
+		expect(label()).toContain("↓ 100 tokens");
+
+		indicator.setProgress(Date.now(), 2000, "down");
+		expect(label()).toContain("↓ 100 tokens");
+		vi.advanceTimersByTime(50);
+		expect(label()).not.toContain("↓ 100 tokens");
+		expect(label()).not.toContain("↓ 2.0k tokens");
+		vi.advanceTimersByTime(2000);
+		expect(label()).toContain("↓ 2.0k tokens");
+
+		indicator.dispose();
 	});
 
 	it("keeps the top border unchanged unless the editor opts in", () => {
@@ -155,59 +178,31 @@ describe("status indicators", () => {
 		indicator.dispose();
 	});
 
-	it("sweeps shimmer center back and forth and breathes overall brightness", () => {
+	it("sweeps the shimmer left to right at constant speed, then pauses off-text", () => {
 		initTheme("dark");
 		const text = "Still thinking with high effort";
 		const length = text.length;
-		const half = computeShimmerHalfPeriodMs(length);
+		const sweep = computeShimmerSweepMs(length);
 		const start = computeShimmerCenter(length, 0);
-		const quarter = computeShimmerCenter(length, half / 2);
-		const rightPeak = computeShimmerCenter(length, half);
-		const returnSweep = computeShimmerCenter(length, half * 1.5);
-		const cycleEnd = computeShimmerCenter(length, half * 2);
+		const quarter = computeShimmerCenter(length, sweep / 4);
+		const half = computeShimmerCenter(length, sweep / 2);
+		const end = computeShimmerCenter(length, sweep);
+		const paused = computeShimmerCenter(length, sweep + 500);
 
-		expect(start).toBeLessThan(0);
-		expect(start).toBeGreaterThan(-1);
-		expect(quarter).toBeGreaterThan(start);
-		expect(rightPeak).toBeGreaterThan(length - 1);
-		expect(rightPeak).toBeLessThan(length);
-		expect(returnSweep).toBeLessThan(rightPeak);
-		expect(cycleEnd).toBeCloseTo(start, 5);
+		expect(start).toBeLessThan(-2);
+		expect(half - quarter).toBeCloseTo(quarter - start, 5);
+		expect(end).toBeGreaterThan(length + 1);
+		expect(paused).toBeCloseTo(end, 5);
 
-		// Breathing brightness oscillates smoothly from bright crest (1) down to dim trough (0) and back.
-		expect(computeShimmerBreath(0)).toBeCloseTo(1, 5);
-		expect(computeShimmerBreath(1300)).toBeCloseTo(0, 5);
-		expect(computeShimmerBreath(2600)).toBeCloseTo(1, 5);
+		// During the pause the label is one flat base color without bold.
+		const flat = renderShimmerText(text, theme.colors.thinkingHigh, sweep + 500);
+		expect(new Set(flat.match(/\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m/g) ?? []).size).toBe(1);
+		expect(flat).not.toContain("\x1b[1m");
 
-		// Same shimmer position at different breathing phases produces noticeably different overall brightness,
-		// and dim trough softens bold emphasis while bright crest gleams bold.
-		const averageRgbLuma = (rendered: string): number => {
-			const matches = [...rendered.matchAll(/\x1b\[38;2;(\d+);(\d+);(\d+)m/g)];
-			expect(matches.length).toBeGreaterThan(0);
-			const sum = matches.reduce(
-				(acc, m) => acc + 0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3]),
-				0,
-			);
-			return sum / matches.length;
-		};
-
-		const bright = renderShimmerText(text, theme.colors.thinkingHigh, 0);
-		const dim = renderShimmerText(text, theme.colors.thinkingHigh, 1300);
-		expect(bright).not.toBe(dim);
-		expect(averageRgbLuma(bright) - averageRgbLuma(dim)).toBeGreaterThan(45);
-		expect(bright).toContain("\x1b[1m");
-		expect(dim).not.toContain("\x1b[1m");
-
-		// Short working labels also keep distinct shimmer shades across the word.
-		const shortRendered = renderShimmerText("Running", theme.colors.thinkingXhigh, 0);
+		// Mid-sweep, short labels show distinct shades across the word.
+		const shortRendered = renderShimmerText("Running", theme.colors.thinkingXhigh, computeShimmerSweepMs(7) / 2);
 		const shortShades = new Set(shortRendered.match(/\x1b\[38;(?:2;\d+;\d+;\d+|5;\d+)m/g) ?? []);
 		expect(shortShades.size).toBeGreaterThan(2);
-
-		// Light mode also breathes noticeably between soft dim trough and vivid bright crest.
-		initTheme("light");
-		const lightBright = renderShimmerText(text, theme.colors.thinkingHigh, 0);
-		const lightDim = renderShimmerText(text, theme.colors.thinkingHigh, 1300);
-		expect(averageRgbLuma(lightDim) - averageRgbLuma(lightBright)).toBeGreaterThan(35);
 	});
 
 	it("embeds compaction, summary, and retry labels within the border width", () => {

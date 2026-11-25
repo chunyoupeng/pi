@@ -90,10 +90,6 @@ export function formatElapsedTime(totalSeconds: number): string {
 	return `${hours > 0 ? `${hours}h ` : ""}${minutes > 0 ? `${minutes}m ` : ""}${remainingSeconds}s`;
 }
 
-export function formatTtft(totalSeconds: number): string {
-	return formatElapsedTime(Math.max(1, Math.round(totalSeconds)));
-}
-
 export class StatusIndicator extends Loader {
 	readonly kind: StatusIndicatorKind;
 
@@ -124,14 +120,11 @@ export class StatusIndicator extends Loader {
 }
 
 const SHIMMER_INTERVAL_MS = 50;
-const SHIMMER_BREATH_PERIOD_MS = 2600;
-const SHIMMER_OVERSCAN = 0.5;
-const SHIMMER_MIN_SIGMA = 1.25;
-const SHIMMER_MAX_SIGMA = 4.5;
-const SHIMMER_MID_STOP = 0.25;
-const SHIMMER_BOLD_THRESHOLD = 0.8;
-const SHIMMER_BOLD_BREATH_THRESHOLD = 0.35;
-const DARK_SHADOW_ANCHOR = rgbColor(16, 16, 20);
+const SHIMMER_SIGMA = 1.6;
+// About 3.75 sigma: the band's tail rounds to zero at the ends, so the pause shows the flat base color.
+const SHIMMER_OVERSCAN = 6;
+const SHIMMER_MS_PER_CHAR = 70;
+const SHIMMER_PAUSE_MS = 600;
 const BLACK_COLOR = rgbColor(0, 0, 0);
 const WHITE_COLOR = rgbColor(255, 255, 255);
 // Match CSI foreground SGR codes (truecolor or 256-color) produced by a border color function.
@@ -166,74 +159,41 @@ function lerpRgb(a: { r: number; g: number; b: number }, b: { r: number; g: numb
 }
 
 /**
- * Duration (in ms) for one single-direction shimmer sweep across a label of `length` characters.
+ * Duration (in ms) of one left-to-right shimmer sweep across a label of `length` characters.
  */
-export function computeShimmerHalfPeriodMs(length: number): number {
-	return Math.max(900, Math.min(2000, length * 32 + 650));
+export function computeShimmerSweepMs(length: number): number {
+	return (length - 1 + SHIMMER_OVERSCAN * 2) * SHIMMER_MS_PER_CHAR;
 }
 
 /**
- * Compute the ping-pong light beam center (in character indices) for a shimmer sweep
- * that glides smoothly from left to right and back again without lingering off-text.
+ * Compute the light band center (in character indices): a constant-speed left-to-right sweep,
+ * then a pause with the band parked off-text before the next sweep starts from the left.
  */
 export function computeShimmerCenter(length: number, elapsedMs: number): number {
-	const halfPeriodMs = computeShimmerHalfPeriodMs(length);
-	const fullPeriodMs = halfPeriodMs * 2;
-	const phase = (Math.max(0, elapsedMs) % fullPeriodMs) / fullPeriodMs;
-	const wave = 0.5 - 0.5 * Math.cos(phase * Math.PI * 2);
-	return -SHIMMER_OVERSCAN + wave * (length - 1 + SHIMMER_OVERSCAN * 2);
+	const sweepMs = computeShimmerSweepMs(length);
+	const t = Math.max(0, elapsedMs) % (sweepMs + SHIMMER_PAUSE_MS);
+	const progress = Math.min(1, t / sweepMs);
+	return -SHIMMER_OVERSCAN + progress * (length - 1 + SHIMMER_OVERSCAN * 2);
 }
 
 /**
- * Compute the overall breathing brightness factor in [0, 1] (0 = dim trough, 1 = bright crest)
- * layered on top of the sweeping shimmer beam.
- */
-export function computeShimmerBreath(elapsedMs: number): number {
-	const phase = (Math.max(0, elapsedMs) % SHIMMER_BREATH_PERIOD_MS) / SHIMMER_BREATH_PERIOD_MS;
-	return 0.5 + 0.5 * Math.cos(phase * Math.PI * 2);
-}
-
-/**
- * Render text with a smooth back-and-forth light-and-shadow shimmer band layered over
- * a continuous breathing brightness modulation in `baseColor`.
+ * Render text in `baseColor` with a soft highlight band sweeping from left to right.
  */
 export function renderShimmerText(text: string, baseColor: Color, elapsedMs: number): string {
 	const characters = Array.from(text);
 	if (characters.length === 0) return "";
 
-	const isDark = theme.appearance === "dark";
-	const breath = computeShimmerBreath(elapsedMs);
-	const shadowColor = isDark
-		? mixColors(baseColor, DARK_SHADOW_ANCHOR, 0.72 - 0.64 * breath, "srgb")
-		: lerpRgb(
-				colorToRgb(mixColors(baseColor, WHITE_COLOR, 0.36, "srgb")),
-				colorToRgb(mixColors(baseColor, BLACK_COLOR, 0.16, "srgb")),
-				breath,
-			);
-	const midColor = isDark
-		? lerpRgb(
-				colorToRgb(mixColors(baseColor, DARK_SHADOW_ANCHOR, 0.52, "srgb")),
-				colorToRgb(mixColors(baseColor, WHITE_COLOR, 0.28, "srgb")),
-				breath,
-			)
-		: lerpRgb(
-				colorToRgb(mixColors(baseColor, WHITE_COLOR, 0.18, "srgb")),
-				colorToRgb(mixColors(baseColor, BLACK_COLOR, 0.34, "srgb")),
-				breath,
-			);
-	const highlightColor = isDark
-		? mixColors(baseColor, WHITE_COLOR, 0.22 + 0.68 * breath, "srgb")
-		: mixColors(baseColor, BLACK_COLOR, 0.22 + 0.4 * breath, "srgb");
-	const midRgb = colorToRgb(midColor);
-	const shadowRgb = colorToRgb(shadowColor);
-	const highlightRgb = colorToRgb(highlightColor);
+	const baseRgb = colorToRgb(baseColor);
+	const highlightRgb = colorToRgb(
+		theme.appearance === "dark"
+			? mixColors(baseColor, WHITE_COLOR, 0.6, "srgb")
+			: mixColors(baseColor, BLACK_COLOR, 0.45, "srgb"),
+	);
 	const colorMode = theme.getColorMode();
 	const center = computeShimmerCenter(characters.length, elapsedMs);
-	const sigma = Math.max(SHIMMER_MIN_SIGMA, Math.min(SHIMMER_MAX_SIGMA, characters.length * 0.15));
 
 	let result = "";
 	let activeFg = "";
-	let activeBold = false;
 	for (let index = 0; index < characters.length; index++) {
 		const char = characters[index]!;
 		if (char === " " && activeFg.length > 0) {
@@ -241,27 +201,32 @@ export function renderShimmerText(text: string, baseColor: Color, elapsedMs: num
 			continue;
 		}
 		const distance = index - center;
-		const intensity = Math.exp(-(distance * distance) / (2 * sigma * sigma));
-		const color =
-			intensity < SHIMMER_MID_STOP
-				? lerpRgb(shadowRgb, midRgb, intensity / SHIMMER_MID_STOP)
-				: lerpRgb(midRgb, highlightRgb, (intensity - SHIMMER_MID_STOP) / (1 - SHIMMER_MID_STOP));
-		const fg = foregroundAnsi(color, colorMode);
-		const bold = intensity >= SHIMMER_BOLD_THRESHOLD && breath >= SHIMMER_BOLD_BREATH_THRESHOLD;
-		if (fg !== activeFg || bold !== activeBold) {
-			if (activeBold && !bold) result += "\x1b[22m";
-			if (fg !== activeFg) result += fg;
-			if (!activeBold && bold) result += "\x1b[1m";
+		const intensity = Math.exp(-(distance * distance) / (2 * SHIMMER_SIGMA * SHIMMER_SIGMA));
+		const fg = foregroundAnsi(lerpRgb(baseRgb, highlightRgb, intensity), colorMode);
+		if (fg !== activeFg) {
+			result += fg;
 			activeFg = fg;
-			activeBold = bold;
 		}
 		result += char;
 	}
-	if (activeFg.length > 0) {
-		result += activeBold ? "\x1b[22;39m" : "\x1b[39m";
-	}
-	return result;
+	return `${result}\x1b[39m`;
 }
+
+const BREATH_PERIOD_MS = 2000;
+
+/**
+ * Breathing brightness in [0, 1]: starts dim, peaks halfway through each period, eases at both ends.
+ */
+export function computeBreath(elapsedMs: number): number {
+	const phase = (Math.max(0, elapsedMs) % BREATH_PERIOD_MS) / BREATH_PERIOD_MS;
+	return 0.5 - 0.5 * Math.cos(phase * Math.PI * 2);
+}
+
+/** Request phase shown next to the token count: `up` while the model reads the prompt, `down` while it streams output. */
+export type WorkingTokenDirection = "up" | "down";
+
+// Fraction of the remaining gap closed per shimmer tick, so the shown count rolls toward the target.
+const TOKEN_EASE = 0.2;
 
 export class WorkingStatusIndicator extends StatusIndicator {
 	// Rendered during super(), before subclass fields are assigned, hence `| undefined`.
@@ -269,7 +234,9 @@ export class WorkingStatusIndicator extends StatusIndicator {
 	private workingColorFn: ((text: string) => string) | undefined;
 	private animationStartedAt: number | undefined;
 	private startedAt: number | undefined;
-	private outputTokens = 0;
+	private targetTokens = 0;
+	private shownTokens = 0;
+	private direction: WorkingTokenDirection = "down";
 	private detail: string | undefined;
 	private elapsedInterval: NodeJS.Timeout | undefined;
 	private textSweepInterval: NodeJS.Timeout | undefined;
@@ -279,7 +246,7 @@ export class WorkingStatusIndicator extends StatusIndicator {
 		message: string,
 		indicator?: WorkingIndicatorOptions,
 		colorFn?: (text: string) => string,
-		progress?: { startedAt: number; outputTokens: number; detail?: string },
+		progress?: { startedAt: number; tokens: number; direction: WorkingTokenDirection; detail?: string },
 	) {
 		super(
 			"working",
@@ -295,13 +262,12 @@ export class WorkingStatusIndicator extends StatusIndicator {
 		if (!indicator) this.setIndicator();
 		else this.updateDisplay();
 		this.textSweepInterval = setInterval(() => {
-			if (this.baseMessage && this.baseMessage.length > 0) {
-				this.updateDisplay();
-			}
+			if (this.stepShownTokens()) this.updateProgressMessage();
+			else if (this.baseMessage && this.baseMessage.length > 0) this.updateDisplay();
 		}, SHIMMER_INTERVAL_MS);
 		if (progress) {
 			this.detail = progress.detail?.trim() || undefined;
-			this.setProgress(progress.startedAt, progress.outputTokens);
+			this.setProgress(progress.startedAt, progress.tokens, progress.direction);
 		}
 	}
 
@@ -325,16 +291,45 @@ export class WorkingStatusIndicator extends StatusIndicator {
 	override renderMessage(message: string): string {
 		const baseColor = extractColorFromColorFn(this.workingColorFn) ?? theme.colors.accent;
 		const elapsedMs = Date.now() - (this.animationStartedAt ?? Date.now());
-		return renderShimmerText(message, baseColor, elapsedMs);
+		// Only the label shimmers; the progress suffix already changes every second and stays static.
+		const label = this.baseMessage && message.startsWith(this.baseMessage) ? this.baseMessage : message;
+		const suffix = message.slice(label.length);
+		const shimmer = renderShimmerText(label, baseColor, elapsedMs);
+		// The detail (e.g. "still thinking") breathes, so a long silent think still reads as alive.
+		const detailStart = this.detail ? suffix.lastIndexOf(this.detail) : -1;
+		if (!this.detail || detailStart < 0) return shimmer + (suffix ? theme.fg("dim", suffix) : "");
+		const breath = computeBreath(elapsedMs);
+		const detailFg = foregroundAnsi(
+			lerpRgb(colorToRgb(theme.colors.dim), colorToRgb(baseColor), breath),
+			theme.getColorMode(),
+		);
+		return (
+			shimmer +
+			theme.fg("dim", suffix.slice(0, detailStart)) +
+			`${detailFg}${this.detail}\x1b[39m` +
+			theme.fg("dim", suffix.slice(detailStart + this.detail.length))
+		);
 	}
 
-	setProgress(startedAt: number, outputTokens: number): void {
+	/** Show `tokens` for the `direction` phase; the shown count rolls toward it, and snaps when the phase changes. */
+	setProgress(startedAt: number, tokens: number, direction: WorkingTokenDirection): void {
+		const target = Math.max(0, Math.floor(tokens));
+		// Rolling from a 50k prompt down to a fresh output count would read as a countdown.
+		if (this.startedAt === undefined || direction !== this.direction) this.shownTokens = target;
 		this.startedAt = startedAt;
-		this.outputTokens = Math.max(0, Math.floor(outputTokens));
+		this.targetTokens = target;
+		this.direction = direction;
 		if (!this.elapsedInterval) {
 			this.elapsedInterval = setInterval(() => this.updateProgressMessage(), 1000);
 		}
 		this.updateProgressMessage();
+	}
+
+	private stepShownTokens(): boolean {
+		const gap = this.targetTokens - this.shownTokens;
+		if (gap === 0) return false;
+		this.shownTokens += Math.sign(gap) * Math.ceil(Math.abs(gap) * TOKEN_EASE);
+		return true;
 	}
 
 	private updateProgressMessage(): void {
@@ -344,10 +339,11 @@ export class WorkingStatusIndicator extends StatusIndicator {
 			return;
 		}
 		const elapsedSeconds = (Date.now() - this.startedAt) / 1000;
-		const tokenUnit = this.outputTokens === 1 ? "token" : "tokens";
+		const arrow = this.direction === "up" ? "↑" : "↓";
+		const tokenUnit = this.shownTokens === 1 ? "token" : "tokens";
 		const detailSuffix = this.detail ? ` · ${this.detail}` : "";
 		super.setMessage(
-			`${baseMessage} (${formatElapsedTime(elapsedSeconds)} · ${formatTokens(this.outputTokens)} ${tokenUnit}${detailSuffix})`,
+			`${baseMessage} (${formatElapsedTime(elapsedSeconds)} · ${arrow} ${formatTokens(this.shownTokens)} ${tokenUnit}${detailSuffix})`,
 		);
 	}
 

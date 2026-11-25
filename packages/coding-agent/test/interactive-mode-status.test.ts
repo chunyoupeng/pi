@@ -950,7 +950,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 	});
 });
 
-describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
+describe("InteractiveMode end-of-turn timing status", () => {
 	function createHandleEventHarness() {
 		const statuses: string[] = [];
 		const fakeThis: Record<string, unknown> = {
@@ -979,6 +979,7 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 			getMarkdownTransformers: () => [],
 			updateLiveOutputTokens: vi.fn(),
 			updateWorkingOutputTokenLabel: vi.fn(),
+			startRequestInputPhase: vi.fn(),
 			clearLiveOutputTokens: vi.fn(),
 			clearStatusIndicator: vi.fn(),
 			hasVisibleAssistantText: () => true,
@@ -987,7 +988,6 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 			maybeShowCacheMissNotice: vi.fn(),
 			showStatus: (message: string) => statuses.push(message),
 			agentStartedAt: undefined,
-			agentFirstTokenAt: undefined,
 			assistantFirstTokenAt: undefined,
 			completedAgentGenerationMs: 0,
 			completedAgentOutputTokens: 0,
@@ -1019,7 +1019,7 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 		};
 	}
 
-	test("reports total time, TTFT, and decode TPS while ignoring empty usage-sync deltas", async () => {
+	test("shows only total time and decode TPS, ignoring empty usage-sync deltas for TPS", async () => {
 		initTheme("dark");
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
@@ -1030,7 +1030,7 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 			await handleEvent({ type: "agent_start" });
 			await handleEvent({ type: "message_start", message: partial });
 			vi.advanceTimersByTime(1000);
-			// Empty delta (e.g. usage sync) must not trigger TTFT.
+			// Empty delta (e.g. usage sync) must not start the decode timer.
 			await handleEvent({
 				type: "message_update",
 				message: partial,
@@ -1048,7 +1048,7 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 			await handleEvent({ type: "agent_end", messages: [] });
 
 			expect(statuses).toHaveLength(1);
-			expect(statuses[0]).toMatch(/· 1m 52s · 3s · 35\.4 tok\/s$/);
+			expect(statuses[0]).toMatch(/^[^·]+ · 1m 52s · 35\.4 tok\/s$/);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1091,8 +1091,8 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 			await handleEvent({ type: "agent_end", messages: [] });
 
 			expect(statuses).toHaveLength(1);
-			// Total 73.5s -> 1m 13s, initial TTFT 2s, pure decode 1000 / (2s + 8s) = 100.0 tok/s.
-			expect(statuses[0]).toMatch(/· 1m 13s · 2s · 100\.0 tok\/s$/);
+			// Total 73.5s -> 1m 13s, pure decode 1000 / (2s + 8s) = 100.0 tok/s.
+			expect(statuses[0]).toMatch(/· 1m 13s · 100\.0 tok\/s$/);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1119,7 +1119,7 @@ describe("InteractiveMode end-of-turn TTFT and TPS status", () => {
 			await handleEvent({ type: "agent_end", messages: [] });
 
 			expect(statuses).toHaveLength(1);
-			expect(statuses[0]).toMatch(/· 2s · 2s · 10\.0 tok\/s$/);
+			expect(statuses[0]).toMatch(/· 2s · 10\.0 tok\/s$/);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1156,7 +1156,7 @@ describe("InteractiveMode thinking status and live footer context", () => {
 		};
 		const fakeThis: Record<string, unknown> = {
 			isInitialized: true,
-			session: { thinkingLevel, isStreaming: true, routedModel: undefined, model: { reasoning } },
+			session: { thinkingLevel, isStreaming: true, routedModel: undefined, model: { reasoning }, messages: [] },
 			footer,
 			programStatus: { handleEvent: vi.fn() },
 			pendingTools: new Map(),
@@ -1184,6 +1184,7 @@ describe("InteractiveMode thinking status and live footer context", () => {
 			getWorkingDetail: (InteractiveMode as any).prototype.getWorkingDetail,
 			updateLiveOutputTokens: (InteractiveMode as any).prototype.updateLiveOutputTokens,
 			updateWorkingOutputTokenLabel: (InteractiveMode as any).prototype.updateWorkingOutputTokenLabel,
+			startRequestInputPhase: (InteractiveMode as any).prototype.startRequestInputPhase,
 			clearLiveOutputTokens: (InteractiveMode as any).prototype.clearLiveOutputTokens,
 			clearStatusIndicator: vi.fn(),
 			hasVisibleAssistantText: () => true,
@@ -1192,7 +1193,6 @@ describe("InteractiveMode thinking status and live footer context", () => {
 			maybeShowCacheMissNotice: vi.fn(),
 			showStatus: vi.fn(),
 			agentStartedAt: undefined,
-			agentFirstTokenAt: undefined,
 			assistantFirstTokenAt: undefined,
 			completedAgentGenerationMs: 0,
 			completedAgentOutputTokens: 0,
@@ -1473,6 +1473,40 @@ describe("InteractiveMode thinking status and live footer context", () => {
 
 			await handleEvent({ type: "message_end", message: step1 });
 			expect(footer.setLiveContextTokens).toHaveBeenLastCalledWith(undefined);
+		} finally {
+			indicator.dispose();
+		}
+	});
+
+	test("shows the request's prompt size with an up arrow until the first output token, then output with a down arrow", async () => {
+		initTheme("dark");
+		const { fakeThis, indicator, handleEvent } = createStreamingHarness("off", false);
+		try {
+			const empty = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+			const history = makeAssistantMessage([{ type: "text", text: "earlier" }], {
+				input: 50_000,
+				output: 2_000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 52_000,
+			});
+			(fakeThis.session as { messages: unknown[] }).messages = [history];
+			const label = () => stripAnsi(indicator.render(120).join("\n"));
+
+			await handleEvent({ type: "agent_start" });
+			await handleEvent({ type: "turn_start" });
+			expect(label()).toContain("↑ 52k tokens");
+
+			const streaming = makeAssistantMessage([{ type: "text", text: "x".repeat(400) }], empty);
+			await handleEvent({ type: "message_start", message: makeAssistantMessage([], empty) });
+			expect(label()).toContain("↑ 52k tokens");
+
+			await handleEvent({
+				type: "message_update",
+				message: streaming,
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: streaming },
+			});
+			expect(label()).toContain("↓ 100 tokens");
 		} finally {
 			indicator.dispose();
 		}

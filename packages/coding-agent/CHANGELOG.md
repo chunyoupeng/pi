@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- The end-of-turn status shows total elapsed time and generation speed without a separate time-to-first-token value
+
 ## [1.6.0] - 2026-11-20
 
 ### New Features
