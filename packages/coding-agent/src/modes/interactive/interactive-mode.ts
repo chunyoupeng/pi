@@ -694,6 +694,8 @@ export class InteractiveMode {
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private readonly entriesRenderedByBoundaryCompaction = new Set<string>();
 	private streamingMessage: AssistantMessage | undefined = undefined;
+	/** First content block of `streamingMessage` rendered by `streamingComponent`. */
+	private streamingContentStart = 0;
 	private agentStartedAt: number | undefined = undefined;
 	private assistantFirstTokenAt: number | undefined = undefined;
 	private completedAgentGenerationMs = 0;
@@ -3959,6 +3961,7 @@ export class InteractiveMode {
 					);
 					this.streamingComponent.setExpanded(this.toolOutputExpanded);
 					this.streamingComponent.setStreaming(true);
+					this.streamingContentStart = 0;
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
@@ -4044,9 +4047,14 @@ export class InteractiveMode {
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					// Partial updates can stream text before a later tool call, so decide only from the final message.
+					// A message split by entries mid-stream (see addCustomEntryToChat) gets the divider before its last segment.
+					const splitByEntries = this.streamingContentStart > 0;
+					const finalSegment = splitByEntries
+						? { ...event.message, content: event.message.content.slice(this.streamingContentStart) }
+						: event.message;
 					if (
-						this.addToolOutputDividerBeforeNextAssistant &&
-						this.hasVisibleAssistantText(event.message) &&
+						(this.addToolOutputDividerBeforeNextAssistant || splitByEntries) &&
+						this.hasVisibleAssistantText(finalSegment) &&
 						!event.message.content.some((content) => content.type === "toolCall")
 					) {
 						this.addToolOutputDividerBefore(this.streamingComponent);
@@ -4414,7 +4422,37 @@ export class InteractiveMode {
 		if (this.streamingComponent) {
 			const streamingIndex = this.chatContainer.children.indexOf(this.streamingComponent);
 			if (streamingIndex >= 0) {
-				this.chatContainer.children.splice(streamingIndex, 0, component);
+				const message = this.streamingMessage;
+				const start = this.streamingContentStart;
+				if (!message || message.content.length <= start) {
+					this.chatContainer.children.splice(streamingIndex, 0, component);
+					return;
+				}
+				// Entries can arrive while one assistant message streams for a long time (e.g. providers that run tools
+				// remotely). Freeze what has streamed so far, show the entry after it, and stream the rest below.
+				const end = message.content.length;
+				const frozen = this.streamingComponent;
+				frozen.setStreaming(false);
+				frozen.dispose();
+				frozen.updateContent(
+					{ ...message, content: message.content.slice(0, end).map((block) => ({ ...block })) },
+					false,
+				);
+				const next = new AssistantMessageComponent(
+					undefined,
+					this.hideThinkingBlock,
+					this.getMarkdownThemeWithSettings(),
+					this.hiddenThinkingLabel,
+					this.outputPad,
+					this.getMarkdownTransformers(),
+				);
+				next.setExpanded(this.toolOutputExpanded);
+				next.setStreaming(true);
+				next.setContentStart(end);
+				next.updateContent(message, true);
+				this.streamingComponent = next;
+				this.streamingContentStart = end;
+				this.chatContainer.children.splice(streamingIndex + 1, 0, component, next);
 				return;
 			}
 		}

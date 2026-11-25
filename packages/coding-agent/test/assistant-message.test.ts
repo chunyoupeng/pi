@@ -68,6 +68,19 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 	});
 
+	test("renders only content blocks from setContentStart onward", () => {
+		initTheme("dark");
+		const message = createAssistantMessage([
+			{ type: "text", text: "before tool" },
+			{ type: "text", text: "after tool" },
+		]);
+		const component = new AssistantMessageComponent(message);
+		component.setContentStart(1);
+		const text = stripAnsi(component.render(40).join("\n"));
+		expect(text).toContain("after tool");
+		expect(text).not.toContain("before tool");
+	});
+
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
 		initTheme("dark");
 

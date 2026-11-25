@@ -92,6 +92,8 @@ export class AssistantMessageComponent extends Container {
 	private timestamp?: string;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	private markdownSlots: MarkdownSlot[] = [];
+	/** First content block rendered; earlier blocks were already shown by a component split off mid-stream. */
+	private contentStart = 0;
 	private renderCache?: {
 		source: readonly string[];
 		width: number;
@@ -162,6 +164,14 @@ export class AssistantMessageComponent extends Container {
 		this.outputPad = padding;
 		// Markdown takes its padding at construction.
 		this.markdownSlots = [];
+		if (this.lastMessage) {
+			this.applyContent(this.lastMessage);
+		}
+	}
+
+	/** Render only content blocks from `index` onward. */
+	setContentStart(index: number): void {
+		this.contentStart = index;
 		if (this.lastMessage) {
 			this.applyContent(this.lastMessage);
 		}
@@ -336,7 +346,7 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let thinkingRunIndex = 0;
-		for (let i = 0; i < message.content.length; i++) {
+		for (let i = this.contentStart; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text") {
 				const text = displayText(content.text).trim();
