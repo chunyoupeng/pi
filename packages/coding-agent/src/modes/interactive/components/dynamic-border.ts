@@ -10,9 +10,14 @@ import { theme } from "../theme/theme.ts";
  */
 export class DynamicBorder implements Component {
 	private color: (str: string) => string;
+	private paddingX: number | (() => number);
 
-	constructor(color: (str: string) => string = (str) => theme.fg("border", str)) {
+	constructor(
+		color: (str: string) => string = (str) => theme.fg("border", str),
+		paddingX: number | (() => number) = 0,
+	) {
 		this.color = color;
+		this.paddingX = paddingX;
 	}
 
 	invalidate(): void {
@@ -20,6 +25,9 @@ export class DynamicBorder implements Component {
 	}
 
 	render(width: number): string[] {
-		return [this.color("─".repeat(Math.max(1, width)))];
+		const requestedPad = Math.max(0, typeof this.paddingX === "function" ? this.paddingX() : this.paddingX);
+		const pad = Math.min(requestedPad, Math.floor(Math.max(0, width - 1) / 2));
+		const lineWidth = Math.max(1, width - pad * 2);
+		return [`${" ".repeat(pad)}${this.color("─".repeat(lineWidth))}`];
 	}
 }

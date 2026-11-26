@@ -3882,7 +3882,9 @@ export class InteractiveMode {
 			case "entry_appended":
 				if (this.entriesRenderedByBoundaryCompaction.delete(event.entry.id)) break;
 				if (event.entry.type === "custom") {
-					this.addCustomEntryToChat(event.entry);
+					if (this.addCustomEntryToChat(event.entry)) {
+						this.addToolOutputDividerBeforeNextAssistant = true;
+					}
 					this.ui.requestRender();
 				} else if (event.entry.type === "usage" && event.entry.kind === "cache_warm") {
 					this.addCacheWarmingUsage(event.entry);
@@ -4408,15 +4410,15 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): void {
+	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): boolean {
 		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
 		if (!renderer) {
-			return;
+			return false;
 		}
 		const component = new CustomEntryComponent(entry, renderer, this.outputPad);
 		component.setExpanded(this.toolOutputExpanded);
 		if (!component.hasContent()) {
-			return;
+			return false;
 		}
 
 		if (this.streamingComponent) {
@@ -4426,7 +4428,7 @@ export class InteractiveMode {
 				const start = this.streamingContentStart;
 				if (!message || message.content.length <= start) {
 					this.chatContainer.children.splice(streamingIndex, 0, component);
-					return;
+					return true;
 				}
 				// Entries can arrive while one assistant message streams for a long time (e.g. providers that run tools
 				// remotely). Freeze what has streamed so far, show the entry after it, and stream the rest below.
@@ -4453,11 +4455,12 @@ export class InteractiveMode {
 				this.streamingComponent = next;
 				this.streamingContentStart = end;
 				this.chatContainer.children.splice(streamingIndex + 1, 0, component, next);
-				return;
+				return true;
 			}
 		}
 
 		this.chatContainer.addChild(component);
+		return true;
 	}
 
 	private hasVisibleAssistantText(message: AssistantMessage): boolean {
@@ -4466,7 +4469,12 @@ export class InteractiveMode {
 
 	private addToolOutputDivider(): void {
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Markdown("---", this.outputPad, 0, this.getMarkdownThemeWithSettings()));
+		this.chatContainer.addChild(
+			new DynamicBorder(
+				(str) => theme.fg("mdHr", str),
+				() => this.outputPad,
+			),
+		);
 	}
 
 	private addToolOutputDividerBefore(component: Component): void {
@@ -4476,7 +4484,10 @@ export class InteractiveMode {
 			index,
 			0,
 			new Spacer(1),
-			new Markdown("---", this.outputPad, 0, this.getMarkdownThemeWithSettings()),
+			new DynamicBorder(
+				(str) => theme.fg("mdHr", str),
+				() => this.outputPad,
+			),
 		);
 	}
 
@@ -4648,7 +4659,9 @@ export class InteractiveMode {
 
 		for (const item of items) {
 			if (isCustomSessionEntry(item)) {
-				this.addCustomEntryToChat(item);
+				if (this.addCustomEntryToChat(item)) {
+					addDividerBeforeAssistant = true;
+				}
 				continue;
 			}
 			if (isUsageSessionEntry(item)) {
