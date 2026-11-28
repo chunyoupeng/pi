@@ -195,6 +195,7 @@ type FakeInteractiveContext = {
 	showLoadedResources(options?: { force?: boolean; showDiagnosticsWhenQuiet?: boolean }): void;
 	setToolsExpanded: (expanded: boolean) => void;
 	maybeShowInstallChangeWarning(): void;
+	resetThinkingStatus(): void;
 };
 
 function createFakeInteractiveContext(settings?: { collapseToolOutput?: boolean }): FakeInteractiveContext {
@@ -237,6 +238,7 @@ function createFakeInteractiveContext(settings?: { collapseToolOutput?: boolean 
 		showLoadedResources: vi.fn(),
 		setToolsExpanded: proto.setToolsExpanded,
 		maybeShowInstallChangeWarning: vi.fn(),
+		resetThinkingStatus: vi.fn(),
 	};
 }
 
@@ -390,8 +392,8 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(finalOutput).toContain("Edit(src/edit.ts)");
 		expect(finalOutput).toContain("LIVE_EDIT_DIFF");
 		expect(finalOutput).toContain("Write(src/new.ts)");
-		expect(finalOutput).toContain("└─ Wrote 1 line");
-		expect(finalOutput).not.toContain("LIVE_WRITE_BODY");
+		expect(finalOutput).toContain("└─ Wrote 1 line to src/new.ts");
+		expect(finalOutput).toContain("1 export const LIVE_WRITE_BODY = 1;");
 		// Finished, successful calls collapse to the group header; failed ones keep their line.
 		expect(finalOutput).toContain("Read 2 files");
 		expect(finalOutput).not.toContain("└─ src/a.ts");
@@ -561,8 +563,8 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(collapsedOutput).not.toContain("RESUMED_ERR_OUTPUT");
 		expect(collapsedOutput).toContain("RESUMED_EDIT_DIFF");
 		expect(collapsedOutput).toContain("Write(src/write.ts)");
-		expect(collapsedOutput).toContain("└─ Wrote 1 line");
-		expect(collapsedOutput).not.toContain("RESUMED_WRITE_BODY");
+		expect(collapsedOutput).toContain("└─ Wrote 1 line to src/write.ts");
+		expect(collapsedOutput).toContain("1 export const RESUMED_WRITE_BODY = 1;");
 		expect(collapsedOutput).toContain("Read 1 file");
 		expect(collapsedOutput).not.toContain("└─ src/read.ts");
 		expect(collapsedOutput).not.toContain("RESUMED_READ_1");

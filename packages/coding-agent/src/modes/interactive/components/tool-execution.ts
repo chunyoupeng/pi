@@ -49,8 +49,7 @@ export interface ToolCallHandle {
 
 /** Keep one glyph for every state: text circles with different outlines do not share a terminal-cell centre. */
 const STATUS_BULLET = "⏺";
-/** Foreground colors cycled by the bullet while the tool is executing, giving the fixed dot a pulse. */
-const RUNNING_BULLET_FRAMES = ["border", "dim"] as const;
+/** While the tool executes, the bullet blinks: dim for one interval, blank for the next. */
 const RUNNING_BULLET_INTERVAL_MS = 500;
 const RESULT_BRANCH = "└─";
 const CALL_GUTTER_WIDTH = 2;
@@ -183,12 +182,11 @@ export class ToolExecutionComponent extends Container implements ToolCallHandle 
 		};
 	}
 
-	/** Bullet color tracks the call's outcome: pending (blue), running (blue/gray pulse), done (green), or failed (red). */
+	/** Bullet color tracks the call's outcome: pending (blue), running (dim blink), done (green), or failed (red). */
 	private renderStatusBullet(): string {
 		if (this.isRunning()) {
-			const frame =
-				RUNNING_BULLET_FRAMES[Math.floor(Date.now() / RUNNING_BULLET_INTERVAL_MS) % RUNNING_BULLET_FRAMES.length];
-			return theme.fg(frame, STATUS_BULLET);
+			const on = Math.floor(Date.now() / RUNNING_BULLET_INTERVAL_MS) % 2 === 0;
+			return on ? theme.fg("dim", STATUS_BULLET) : " ";
 		}
 		if (!this.result) {
 			return theme.fg("border", STATUS_BULLET);

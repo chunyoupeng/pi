@@ -9,6 +9,8 @@
 ### Changed
 
 - The end-of-turn status shows total elapsed time and generation speed without a separate time-to-first-token value
+- A finished `write` shows `Wrote N lines to <path>` followed by the file's first 10 lines, numbered and highlighted, with the rest behind the expand key; the call row shows the file only while it streams
+- A running tool's status bullet blinks between dim and blank instead of alternating colors
 
 ### Fixed
 

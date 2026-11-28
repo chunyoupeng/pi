@@ -1,5 +1,4 @@
 import { DynamicText } from "../../../modes/interactive/components/dynamic-text.ts";
-import { formatCollapsedOutput } from "../render-utils.ts";
 /**
  * Presentation for the write tool.
  *
@@ -8,7 +7,6 @@ import { formatCollapsedOutput } from "../render-utils.ts";
  * definition, so the tool's public shape is unchanged.
  */
 
-import { Text } from "@earendil-works/pi-tui";
 import {
 	CodeHighlighter,
 	getLanguageFromPath,
@@ -16,7 +14,15 @@ import {
 	type Theme,
 } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
-import { countContentLines, normalizeDisplayText, renderToolPath, replaceTabs, str } from "../render-utils.ts";
+import {
+	countContentLines,
+	formatCollapsedOutput,
+	formatOmittedLinesHint,
+	normalizeDisplayText,
+	renderToolPath,
+	replaceTabs,
+	str,
+} from "../render-utils.ts";
 
 type WriteHighlightCache = {
 	rawPath: string | null;
@@ -122,7 +128,8 @@ function formatWriteCall(
 
 	if (fileContent === null) {
 		text += `\n${theme.fg("error", "[invalid content arg - expected string]")}`;
-	} else if (fileContent && options.expanded) {
+	} else if (fileContent && options.expanded && options.isPartial) {
+		// Only until the result arrives: the result then shows the written file with line numbers.
 		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 		const renderedLines = lang
 			? (cache?.highlightedLines ?? highlighter.highlight(replaceTabs(normalizeDisplayText(fileContent)), lang))
@@ -141,24 +148,63 @@ function formatWriteCall(
 
 	return text;
 }
+/** Lines of the written file shown under `Wrote N lines` until the row is expanded, like Claude Code. */
+const WRITE_PREVIEW_LINES = 10;
+/** Line numbers are right-aligned to at least this width, which indents short files' code under the summary. */
+const LINE_NUMBER_MIN_WIDTH = 4;
+
+class WriteResultRenderComponent extends DynamicText {
+	// Expand toggles and redraws rebuild the preview; the highlighter keeps the file from being highlighted again.
+	readonly highlighter = new CodeHighlighter();
+
+	constructor() {
+		super(undefined, 0, 0);
+	}
+}
 function formatWriteResult(
-	args: { content?: unknown } | undefined,
+	args: { path?: unknown; file_path?: unknown; content?: unknown } | undefined,
 	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean },
 	options: ToolRenderResultOptions,
 	theme: Theme,
-): string | undefined {
+	highlighter: CodeHighlighter,
+	cwd: string,
+): string {
 	if (result.isError) {
 		const output = result.content
 			.filter((c) => c.type === "text")
 			.map((c) => c.text || "")
 			.join("\n");
-		return output ? `\n${theme.fg("error", output)}` : undefined;
+		return output ? `\n${theme.fg("error", output)}` : "";
 	}
 	if (options.isPartial || typeof args?.content !== "string") {
-		return undefined;
+		return "";
 	}
+	const rawPath = str(args.file_path ?? args.path);
 	const lineCount = countContentLines(args.content);
-	return theme.fg("muted", `Wrote ${lineCount} ${lineCount === 1 ? "line" : "lines"}`);
+	const summary = `${theme.fg("muted", `Wrote ${theme.bold(String(lineCount))} ${lineCount === 1 ? "line" : "lines"} to `)}${renderToolPath(rawPath, theme, cwd)}`;
+	const preview = formatWritePreview(rawPath, args.content, options.expanded, theme, highlighter);
+	return preview ? `${summary}\n${preview}` : summary;
+}
+/** The file's first lines (all of them when expanded), numbered and highlighted by its extension. */
+function formatWritePreview(
+	rawPath: string | null,
+	content: string,
+	expanded: boolean,
+	theme: Theme,
+	highlighter: CodeHighlighter,
+): string {
+	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+	const source = replaceTabs(normalizeDisplayText(content));
+	const lines = trimTrailingEmptyLines(
+		lang ? highlighter.highlight(source, lang) : source.split("\n").map((line) => theme.fg("toolOutput", line)),
+	);
+	const shown = expanded ? lines : lines.slice(0, WRITE_PREVIEW_LINES);
+	const numberWidth = Math.max(LINE_NUMBER_MIN_WIDTH, String(shown.length).length);
+	const body = shown.map((line, index) => `${theme.fg("dim", String(index + 1).padStart(numberWidth))} ${line}`);
+	if (shown.length < lines.length) {
+		body.push(formatOmittedLinesHint(lines.length - shown.length, theme));
+	}
+	return body.join("\n");
 }
 
 export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
@@ -186,14 +232,20 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		return component;
 	},
 	renderResult(result, options, theme, context) {
-		const output = formatWriteResult(
-			context.args as { content?: unknown } | undefined,
-			{ ...result, isError: context.isError },
-			options,
-			theme,
+		const component =
+			context.lastComponent instanceof WriteResultRenderComponent
+				? context.lastComponent
+				: new WriteResultRenderComponent();
+		component.setBuilder(() =>
+			formatWriteResult(
+				context.args as { path?: unknown; file_path?: unknown; content?: unknown } | undefined,
+				{ ...result, isError: context.isError },
+				options,
+				theme,
+				component.highlighter,
+				context.cwd,
+			),
 		);
-		const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-		text.setText(output ?? "");
-		return text;
+		return component;
 	},
 };

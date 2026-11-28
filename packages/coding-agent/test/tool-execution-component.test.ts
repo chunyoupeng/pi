@@ -1,12 +1,5 @@
 import { join, resolve } from "node:path";
-import {
-	resetCapabilitiesCache,
-	setCapabilities,
-	Text,
-	type TUI,
-	type TuiMouseEvent,
-	visibleWidth,
-} from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, Text, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
@@ -74,7 +67,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(component.render(120).join("\n")).toBe(rendered);
 	});
 
-	test("pulses the running bullet without changing its glyph or gutter position", () => {
+	test("blinks the running bullet between dim and blank without moving the call text", () => {
 		const now = vi.spyOn(Date, "now");
 		try {
 			now.mockReturnValue(0);
@@ -93,14 +86,13 @@ describe("ToolExecutionComponent parity", () => {
 			);
 
 			component.markExecutionStarted();
-			const brightLine = component.render(80).find((line) => stripAnsi(line).includes(statusBulletForTest))!;
+			const onLine = component.render(80).find((line) => stripAnsi(line).includes("custom call"))!;
 			now.mockReturnValue(500);
-			const dimLine = component.render(80).find((line) => stripAnsi(line).includes(statusBulletForTest))!;
+			const offLine = component.render(80).find((line) => stripAnsi(line).includes("custom call"))!;
 
-			expect(visibleWidth(brightLine)).toBe(visibleWidth(dimLine));
-			expect(stripAnsi(brightLine)).toBe(stripAnsi(dimLine));
-			expect(brightLine).toContain(theme.fg("border", statusBulletForTest));
-			expect(dimLine).toContain(theme.fg("dim", statusBulletForTest));
+			expect(onLine).toContain(theme.fg("dim", statusBulletForTest));
+			expect(stripAnsi(offLine)).not.toContain(statusBulletForTest);
+			expect(stripAnsi(offLine).indexOf("custom call")).toBe(stripAnsi(onLine).indexOf("custom call"));
 			component.dispose();
 		} finally {
 			now.mockRestore();
@@ -705,6 +697,38 @@ describe("ToolExecutionComponent parity", () => {
 		const errRendered = stripAnsi(errored.render(120).join("\n"));
 		expect(errRendered).toContain("  └─ EACCES: permission denied");
 		expect(errRendered).not.toContain("Wrote");
+	});
+
+	test("shows the written file numbered under the result, first lines until expanded", () => {
+		const content = Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n");
+		const component = new ToolExecutionComponent(
+			"write",
+			"tool-write-preview",
+			{ path: "notes.txt", content },
+			{},
+			createWriteToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "ok" }], isError: false });
+		const collapsed = component
+			.render(120)
+			.map((line) => stripAnsi(line).trimEnd())
+			.join("\n");
+		expect(collapsed).toContain("└─ Wrote 40 lines to notes.txt\n         1 line-1\n");
+		expect(collapsed).toContain("        10 line-10\n      … +30 lines");
+		expect(collapsed).not.toContain("line-11");
+		expect(collapsed).toContain("… +30 lines");
+
+		// Expanded, the result shows every line once; the call row no longer repeats the file.
+		component.setExpanded(true);
+		const expanded = component
+			.render(120)
+			.map((line) => stripAnsi(line).trimEnd())
+			.join("\n");
+		expect(expanded).toContain("        40 line-40");
+		expect(expanded).not.toContain("+30 lines");
+		expect(expanded.split("line-1\n")).toHaveLength(2);
 	});
 
 	// #9265: every argument delta re-ran the call renderer; a streamed `write` re-highlighted its whole content each time.
