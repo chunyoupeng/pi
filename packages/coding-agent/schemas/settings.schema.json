@@ -212,11 +212,6 @@
       "type": "boolean",
       "default": false
     },
-    "showCacheMissNotices": {
-      "type": "boolean",
-      "description": "Show cache cost and provider recovery notices.",
-      "default": false
-    },
     "externalEditor": {
       "type": "string",
       "description": "Command for Ctrl+G external editor; takes precedence over VISUAL and EDITOR."
@@ -283,11 +278,6 @@
     "collapseToolOutput": {
       "type": "boolean",
       "description": "Hide non-destructive tool output previews (except edit) after a turn completes and when resuming a session.",
-      "default": true
-    },
-    "enableInstallTelemetry": {
-      "type": "boolean",
-      "description": "Send an anonymous version and update ping after changelog-detected updates.",
       "default": true
     },
     "enableAnalytics": {
@@ -628,6 +618,31 @@
         }
       }
     },
+    "notices": {
+      "type": "object",
+      "properties": {
+        "cacheMisses": {
+          "type": "boolean",
+          "description": "Show a notice when a response re-bills a significant part of the prompt cache.",
+          "default": false
+        },
+        "cacheWarming": {
+          "type": "boolean",
+          "description": "Show the cost of cache warming requests.",
+          "default": false
+        },
+        "compactionCosts": {
+          "type": "boolean",
+          "description": "Show the cost of compactions and branch summaries.",
+          "default": false
+        },
+        "reasoningDrops": {
+          "type": "boolean",
+          "description": "Show a notice when a provider drops reasoning items from a request.",
+          "default": false
+        }
+      }
+    },
     "codemode": {
       "type": "object",
       "properties": {
@@ -785,6 +800,11 @@
     "websockets": {
       "type": "boolean",
       "description": "Legacy setting migrated to transport.",
+      "deprecated": true
+    },
+    "showCacheMissNotices": {
+      "type": "boolean",
+      "description": "Legacy setting migrated to notices.",
       "deprecated": true
     }
   },

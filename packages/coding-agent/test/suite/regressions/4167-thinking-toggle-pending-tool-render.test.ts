@@ -43,7 +43,7 @@ type RenderSessionContextThis = {
 	settingsManager: {
 		getShowImages(): boolean;
 		getImageWidthCells(): number;
-		getShowCacheMissNotices(): boolean;
+		getNotices(): { cacheMisses: boolean; cacheWarming: boolean; compactionCosts: boolean; reasoningDrops: boolean };
 		getCollapseToolOutput(): boolean;
 	};
 	sessionManager: { getCwd(): string; getEntries(): SessionEntry[] };
@@ -77,7 +77,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		settingsManager: {
 			getShowImages: () => false,
 			getImageWidthCells: () => 60,
-			getShowCacheMissNotices: () => false,
+			getNotices: () => ({ cacheMisses: false, cacheWarming: false, compactionCosts: false, reasoningDrops: false }),
 			getCollapseToolOutput: () => false,
 		},
 		sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },

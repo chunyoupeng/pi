@@ -3,6 +3,7 @@
  */
 
 import { Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { bashTruncationNote } from "../../../core/messages.ts";
 import { formatCollapsedOutput } from "../../../core/tools/render-utils.ts";
 import {
 	DEFAULT_MAX_BYTES,
@@ -24,6 +25,7 @@ export class BashExecutionComponent extends Container {
 	private loader: Loader;
 	private truncationResult?: TruncationResult;
 	private fullOutputPath?: string;
+	private fullOutputError?: string;
 	private expanded = false;
 	private contentContainer: Container;
 	/** `dim` marks `!!` commands, whose output is excluded from the model context. */
@@ -45,7 +47,7 @@ export class BashExecutionComponent extends Container {
 			ui,
 			(spinner) => theme.fg(this.colorKey, spinner),
 			(text) => theme.fg("muted", text),
-			`Running... (${keyText("tui.select.cancel")} to cancel)`,
+			`Running... (${keyText("app.interrupt")} to cancel)`, // Plain text for loader
 		);
 
 		this.updateDisplay();
@@ -92,6 +94,7 @@ export class BashExecutionComponent extends Container {
 		cancelled: boolean,
 		truncationResult?: TruncationResult,
 		fullOutputPath?: string,
+		fullOutputError?: string,
 	): void {
 		this.exitCode = exitCode;
 		this.status = cancelled
@@ -101,6 +104,7 @@ export class BashExecutionComponent extends Container {
 				: "complete";
 		this.truncationResult = truncationResult;
 		this.fullOutputPath = fullOutputPath;
+		this.fullOutputError = fullOutputError;
 
 		// Stop loader
 		this.loader.stop();
@@ -164,8 +168,13 @@ export class BashExecutionComponent extends Container {
 			}
 
 			const wasTruncated = this.truncationResult?.truncated || contextTruncation.truncated;
-			if (wasTruncated && this.fullOutputPath) {
-				statusParts.push(theme.fg("warning", `Output truncated. Full output: ${this.fullOutputPath}`));
+			if (wasTruncated) {
+				statusParts.push(
+					theme.fg(
+						"warning",
+						bashTruncationNote({ fullOutputPath: this.fullOutputPath, fullOutputError: this.fullOutputError }),
+					),
+				);
 			}
 
 			if (statusParts.length > 0) {

@@ -1,5 +1,4 @@
-import { existsSync, readFileSync, type WriteStream } from "node:fs";
-import { PassThrough } from "node:stream";
+import { existsSync, readFileSync } from "node:fs";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,7 @@ import { renderBgFooterStatus, renderThemedTaskList } from "../../src/extensions
 import { type BgTaskEvent, type BgTaskSnapshot, DEFAULT_LEASE_SECONDS } from "../../src/extensions/bg-task/types.ts";
 import { builtInExtensions } from "../../src/extensions/index.ts";
 import { initTheme, theme } from "../../src/modes/interactive/theme/theme.ts";
+import type { OutputFileStream } from "../../src/utils/output-files.ts";
 import {
 	createHarness,
 	createTestUiContext,
@@ -79,10 +79,14 @@ function createFakeSpawner(): {
 	return { spawner, handles };
 }
 
-function createMemoryLogStream() {
+function createMemoryLogStream(): () => OutputFileStream {
 	return () => {
-		const stream = new PassThrough() as unknown as WriteStream;
-		return { path: `/tmp/fake-bg-${Math.random().toString(36).slice(2)}.log`, stream };
+		const result = { kind: "saved", path: `/tmp/fake-bg-${Math.random().toString(36).slice(2)}.log` } as const;
+		return {
+			result,
+			write: () => {},
+			close: async () => result,
+		};
 	};
 }
 

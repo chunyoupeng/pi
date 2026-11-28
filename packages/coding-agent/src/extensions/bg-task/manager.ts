@@ -1,9 +1,9 @@
-import { constants, type WriteStream } from "node:fs";
+import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { TextDecoder } from "node:util";
 import { spawnProcess, waitForChildProcess } from "../../utils/child-process.ts";
-import { createOutputFileStream } from "../../utils/output-files.ts";
+import { createOutputFileStream, type OutputFileStream } from "../../utils/output-files.ts";
 import {
 	getShellConfig,
 	getShellEnv,
@@ -56,7 +56,7 @@ export interface BgTaskManagerOptions {
 	onPersist?: (snapshot: BgTaskSnapshot) => void;
 	onStateChange?: () => void;
 	spawner?: BgProcessSpawner;
-	createLogStream?: () => { path: string; stream: WriteStream };
+	createLogStream?: () => OutputFileStream;
 	graceSeconds?: number;
 	debounceMs?: number;
 	now?: () => number;
@@ -85,7 +85,7 @@ interface InternalTask {
 	lastOutputAt: number | undefined;
 	totalBytes: number;
 	logPath: string | undefined;
-	logStream: WriteStream | undefined;
+	logStream: OutputFileStream | undefined;
 	notifyOn: BgNotifyMode;
 	ringBuffer: string;
 	unreportedBuffer: string;
@@ -234,7 +234,7 @@ export class BgTaskManager {
 	private readonly onPersist: BgTaskManagerOptions["onPersist"];
 	private readonly onStateChange: BgTaskManagerOptions["onStateChange"];
 	private readonly spawner: BgProcessSpawner;
-	private readonly createLogStream: () => { path: string; stream: WriteStream };
+	private readonly createLogStream: () => OutputFileStream;
 	private readonly graceSeconds: number;
 	private readonly debounceMs: number;
 	private readonly now: () => number;
@@ -727,23 +727,17 @@ export class BgTaskManager {
 
 	private ensureLogStream(task: InternalTask): void {
 		if (task.logStream) return;
-		const { path, stream } = this.createLogStream();
-		stream.on("error", () => {});
-		task.logPath = path;
+		const stream = this.createLogStream();
+		task.logPath = stream.result.kind === "saved" ? stream.result.path : undefined;
 		task.logStream = stream;
 	}
 
-	private closeLogStream(task: InternalTask): Promise<void> {
+	private async closeLogStream(task: InternalTask): Promise<void> {
 		const stream = task.logStream;
-		if (!stream) return Promise.resolve();
+		if (!stream) return;
 		task.logStream = undefined;
-		return new Promise((resolve) => {
-			if (stream.closed || stream.destroyed) {
-				resolve();
-				return;
-			}
-			stream.end(() => resolve());
-		});
+		const result = await stream.close();
+		task.logPath = result.kind === "saved" ? result.path : undefined;
 	}
 
 	private clearScheduleTimer(task: InternalTask): void {
