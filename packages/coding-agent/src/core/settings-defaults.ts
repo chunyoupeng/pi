@@ -27,6 +27,7 @@ export const SETTINGS_DEFAULTS = {
 	hideThinkingBlock: false,
 	quietStartup: false,
 	defaultProjectTrust: "ask",
+	workspaceSwitchPolicy: "workspace",
 	collapseChangelog: false,
 	collapseToolOutput: true,
 	enableAnalytics: false,

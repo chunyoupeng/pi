@@ -795,6 +795,34 @@ export interface SessionInfoChangedEvent {
 	name: string | undefined;
 }
 
+/** Fired when the active session working directory changes. */
+export interface CwdChangedEvent {
+	type: "cwd_changed";
+	/** Previous active working directory. */
+	previousCwd: string;
+	/** New active working directory. */
+	cwd: string;
+	/**
+	 * Mutable map of custom system prompt sections for the active run, when switching mid-run.
+	 * Extensions that maintain cwd-scoped prompt sections (e.g. project memory) may update them here
+	 * so the next turn in the same run immediately picks up the change.
+	 */
+	systemPromptSections?: Record<string, string>;
+}
+
+/** Result of switching the active session working directory via `pi.setCwd()`. */
+export interface SetCwdResult {
+	previousCwd: string;
+	cwd: string;
+	changed: boolean;
+	/** Paths of loaded AGENTS.md / CLAUDE.md context files for the target cwd. */
+	contextFiles: string[];
+	/** Whether the target directory contains trust-requiring `.pi/` resources (extensions, mcp.json, settings.json, etc.). */
+	hasTrustRequiringResources: boolean;
+	/** Whether the target directory is trusted by the user's trust store or default policy. */
+	projectTrusted: boolean;
+}
+
 /** Fired before switching to another session (can be cancelled) */
 export interface SessionBeforeSwitchEvent {
 	type: "session_before_switch";
@@ -890,6 +918,7 @@ export interface SessionTreeEvent {
 export type SessionEvent =
 	| SessionStartEvent
 	| SessionInfoChangedEvent
+	| CwdChangedEvent
 	| SessionBeforeSwitchEvent
 	| SessionBeforeForkEvent
 	| SessionBeforeCompactEvent
@@ -1657,6 +1686,7 @@ export interface ExtensionAPI {
 	): () => void;
 	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): () => void;
 	on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): () => void;
+	on(event: "cwd_changed", handler: ExtensionHandler<CwdChangedEvent>): () => void;
 	on(
 		event: "session_before_switch",
 		handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>,
@@ -1857,6 +1887,14 @@ export interface ExtensionAPI {
 	 * for new sessions.
 	 */
 	setThinkingLevel(level: ThinkingLevel): void;
+
+	/**
+	 * Switch the active working directory of the current session without interrupting the run.
+	 * Resolves `cwd` against the current working directory, updates tools and `ctx.cwd`, reloads
+	 * declarative project context (AGENTS.md, skills, prompts), persists a `cwd_change` entry,
+	 * and emits `cwd_changed`.
+	 */
+	setCwd(cwd: string): Promise<SetCwdResult>;
 
 	// =========================================================================
 	// Provider Registration
@@ -2204,6 +2242,8 @@ export type GetThinkingLevelHandler = () => ThinkingLevel;
 
 export type SetThinkingLevelHandler = (level: ThinkingLevel) => void;
 
+export type SetCwdHandler = (cwd: string) => Promise<SetCwdResult>;
+
 export type SetLabelHandler = (entryId: string, label: string | undefined) => void;
 
 /**
@@ -2266,6 +2306,7 @@ export interface ExtensionActions {
 	setModel: SetModelHandler;
 	getThinkingLevel: GetThinkingLevelHandler;
 	setThinkingLevel: SetThinkingLevelHandler;
+	setCwd: SetCwdHandler;
 }
 
 /**

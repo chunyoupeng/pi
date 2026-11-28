@@ -357,6 +357,28 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): (pi
 			dreamTurnActive = false;
 		});
 
+		pi.on("cwd_changed", async (event) => {
+			cancelIdleTimer();
+			frozenSection = null;
+			reuseTranscriptSection = false;
+			if (event.systemPromptSections) {
+				const currentStore = await ensureStore(event.cwd);
+				const currentGlobalStore = ensureGlobalStore();
+				const [projectEntries, globalEntries] = await Promise.all([
+					currentStore.listEntries(),
+					currentGlobalStore.listEntries(),
+				]);
+				frozenSection = renderPromptSection(
+					currentStore.projectRoot,
+					projectEntries,
+					PROJECT_CHAR_BUDGET,
+					globalEntries,
+					GLOBAL_CHAR_BUDGET,
+				);
+				event.systemPromptSections.project_memory = frozenSection;
+			}
+		});
+
 		pi.on("session_shutdown", async () => {
 			cancelIdleTimer();
 			dreamTurnActive = false;

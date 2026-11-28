@@ -125,7 +125,15 @@ import {
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
-import { readRenderers, type ToolRenderers, withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
+import {
+	findRenderers,
+	grepRenderers,
+	isBuiltInShellRenderers,
+	lsRenderers,
+	readRenderers,
+	type ToolRenderers,
+	withBuiltInRenderers,
+} from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
@@ -547,11 +555,21 @@ interface ExtensionChangelogUpdate {
 
 const NON_COLLAPSIBLE_PREVIEW_TOOLS = new Set(["edit", "write"]);
 
-function isDefaultReadTool(toolName: string, toolDefinition: ToolRenderers | undefined): boolean {
+const BUILT_IN_ACTIVITY_RENDERERS: Readonly<Record<string, ToolRenderers>> = {
+	read: readRenderers,
+	ls: lsRenderers,
+	grep: grepRenderers,
+	find: findRenderers,
+};
+
+/** Built-in exploration tools (read, ls, grep, find, shell) that still use their built-in renderers join an activity group. */
+function isGroupableActivityTool(toolName: string, toolDefinition: ToolRenderers | undefined): boolean {
+	if (toolName === "bash" || toolName === "powershell") return isBuiltInShellRenderers(toolDefinition);
+	const builtIn = BUILT_IN_ACTIVITY_RENDERERS[toolName];
 	return (
-		toolName === "read" &&
-		toolDefinition?.renderCall === readRenderers.renderCall &&
-		toolDefinition?.renderResult === readRenderers.renderResult
+		builtIn !== undefined &&
+		toolDefinition?.renderCall === builtIn.renderCall &&
+		toolDefinition?.renderResult === builtIn.renderResult
 	);
 }
 
@@ -597,14 +615,14 @@ function addToolCallToChat(
 	cwd: string,
 	expanded: boolean,
 ): ToolCallHandle {
-	if (isDefaultReadTool(toolName, toolDefinition)) {
+	if (isGroupableActivityTool(toolName, toolDefinition)) {
 		let group = findJoinableGroup(chatContainer, ReadGroupComponent);
 		if (!group) {
 			group = new ReadGroupComponent(options, ui, cwd);
 			group.setExpanded(expanded);
 			chatContainer.addChild(group);
 		}
-		return group.addCall(toolCallId, args);
+		return group.addCall(toolCallId, args, toolName);
 	}
 	if (isDefaultCodemodeTool(toolName, toolDefinition)) {
 		let group = findJoinableGroup(chatContainer, CodemodeGroupComponent);
@@ -3970,6 +3988,14 @@ export class InteractiveMode {
 				this.updateEditorBorderColor();
 				break;
 
+			case "cwd_changed":
+				this.footerDataProvider.setCwd(event.cwd);
+				this.setupAutocompleteProvider();
+				this.updateTerminalTitle();
+				this.footer.invalidate();
+				this.ui.requestRender();
+				break;
+
 			case "message_start":
 				if (event.message.role === "custom") {
 					this.addMessageToChat(event.message);
@@ -4443,14 +4469,22 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): boolean {
+	/** The chat component for a custom entry, or undefined when no renderer shows it. */
+	private createCustomEntryComponent(
+		entry: Extract<SessionEntry, { type: "custom" }>,
+	): CustomEntryComponent | undefined {
 		const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
 		if (!renderer) {
-			return false;
+			return undefined;
 		}
 		const component = new CustomEntryComponent(entry, renderer, this.outputPad);
 		component.setExpanded(this.toolOutputExpanded);
-		if (!component.hasContent()) {
+		return component.hasContent() ? component : undefined;
+	}
+
+	private addCustomEntryToChat(entry: Extract<SessionEntry, { type: "custom" }>): boolean {
+		const component = this.createCustomEntryComponent(entry);
+		if (!component) {
 			return false;
 		}
 
@@ -4494,6 +4528,44 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(component);
 		return true;
+	}
+
+	/**
+	 * Replay counterpart of the mid-stream split in addCustomEntryToChat. `first` shows the whole message;
+	 * each entry is placed after the blocks that had streamed when it was appended (`streamContentIndex`),
+	 * splitting the message into segments around it. Returns the last segment and its first block index.
+	 */
+	private splitAssistantAroundEntries(
+		first: AssistantMessageComponent,
+		message: AssistantMessage,
+		entries: readonly { index: number; component: CustomEntryComponent }[],
+	): { last: AssistantMessageComponent; start: number } {
+		let current = first;
+		let start = 0;
+		for (const { index, component } of entries) {
+			const at = Math.min(index, message.content.length);
+			const currentIndex = this.chatContainer.children.indexOf(current);
+			if (at <= start) {
+				this.chatContainer.children.splice(currentIndex, 0, component);
+				continue;
+			}
+			current.updateContent({ ...message, content: message.content.slice(0, at) }, false);
+			const next = new AssistantMessageComponent(
+				undefined,
+				this.hideThinkingBlock,
+				this.getMarkdownThemeWithSettings(),
+				this.hiddenThinkingLabel,
+				this.outputPad,
+				this.getMarkdownTransformers(),
+			);
+			next.setExpanded(this.toolOutputExpanded);
+			next.setContentStart(at);
+			next.updateContent(message, false);
+			this.chatContainer.children.splice(currentIndex + 1, 0, component, next);
+			current = next;
+			start = at;
+		}
+		return { last: current, start };
 	}
 
 	private hasVisibleAssistantText(message: AssistantMessage): boolean {
@@ -4692,12 +4764,31 @@ export class InteractiveMode {
 			this.updateEditorBorderColor();
 		}
 
+		// Entries appended while the following assistant message streamed; placed inside it once it renders.
+		let streamedEntries: { index: number; component: CustomEntryComponent }[] = [];
+		const flushStreamedEntries = () => {
+			for (const { component } of streamedEntries) this.chatContainer.addChild(component);
+			if (streamedEntries.length > 0) addDividerBeforeAssistant = true;
+			streamedEntries = [];
+		};
+
 		for (const item of items) {
 			if (isCustomSessionEntry(item)) {
+				// Index 0 means nothing had streamed yet: the entry goes before the message, as before.
+				if (item.streamContentIndex !== undefined && item.streamContentIndex > 0) {
+					const component = this.createCustomEntryComponent(item);
+					if (component) streamedEntries.push({ index: item.streamContentIndex, component });
+					continue;
+				}
+				flushStreamedEntries();
 				if (this.addCustomEntryToChat(item)) {
 					addDividerBeforeAssistant = true;
 				}
 				continue;
+			}
+			// Only the assistant message they streamed inside takes buffered entries; anything else follows them.
+			if (isUsageSessionEntry(item) || isCompactionCostNotice(item) || item.role !== "assistant") {
+				flushStreamedEntries();
 			}
 			if (isUsageSessionEntry(item)) {
 				this.addCacheWarmingUsage(item);
@@ -4721,6 +4812,16 @@ export class InteractiveMode {
 					messageId: meta?.id,
 					timestamp: meta?.timestamp,
 				});
+				if (streamedEntries.length > 0) {
+					const first = this.chatContainer.children.at(-1) as AssistantMessageComponent;
+					const { last, start } = this.splitAssistantAroundEntries(first, message, streamedEntries);
+					streamedEntries = [];
+					// Same rule as the live split: a divider before the final segment when it answers in text.
+					const finalSegment = { ...message, content: message.content.slice(start) };
+					if (start > 0 && !hasToolCall && this.hasVisibleAssistantText(finalSegment)) {
+						this.addToolOutputDividerBefore(last);
+					}
+				}
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
@@ -4790,6 +4891,7 @@ export class InteractiveMode {
 			}
 		}
 
+		flushStreamedEntries();
 		for (const [toolCallId, component] of renderedPendingTools) {
 			this.pendingTools.set(toolCallId, component);
 			this.turnTools.add(component);

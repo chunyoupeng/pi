@@ -295,6 +295,19 @@ export const SettingsSchema = Type.Object(
 				default: SETTINGS_DEFAULTS.defaultProjectTrust,
 			}),
 		),
+		workspaceSwitchPolicy: Type.Optional(
+			Type.Union([Type.Literal("off"), Type.Literal("workspace"), Type.Literal("ask"), Type.Literal("allow")], {
+				description:
+					'Controls agent-initiated workspace switching via switch_workspace: "workspace" allows switching within the launch directory or allowedWorkspaces without prompting and asks outside; "ask" always confirms; "allow" switches without prompting; "off" disables agent switching (manual /cd still works).',
+				default: SETTINGS_DEFAULTS.workspaceSwitchPolicy,
+			}),
+		),
+		allowedWorkspaces: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					'Additional root directories the agent may switch into without confirmation when workspaceSwitchPolicy is "workspace". Supports leading ~ expansion.',
+			}),
+		),
 		shellCommandPrefix: Type.Optional(
 			Type.String({ description: "Prefix prepended to every bash command, for example to enable shell aliases." }),
 		),
@@ -511,6 +524,7 @@ export interface NoticeSettings extends Static<typeof NoticeSettingsSchema> {}
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}
 export type DefaultProjectTrust = NonNullable<SettingsInput["defaultProjectTrust"]>;
+export type WorkspaceSwitchPolicy = NonNullable<SettingsInput["workspaceSwitchPolicy"]>;
 export type QuietStartup = NonNullable<SettingsInput["quietStartup"]>;
 export type TransportSetting = NonNullable<SettingsInput["transport"]>;
 export type SessionShareDestination = NonNullable<SettingsInput["sessionShareDestination"]>;

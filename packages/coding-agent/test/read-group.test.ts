@@ -89,6 +89,7 @@ type FakeInteractiveContext = {
 
 function createFakeInteractiveContext(options?: {
 	customReadRenderer?: ToolRenderers;
+	customBashRenderer?: ToolRenderers;
 	collapseToolOutput?: boolean;
 }): FakeInteractiveContext {
 	const chatContainer = new Container();
@@ -131,7 +132,9 @@ function createFakeInteractiveContext(options?: {
 		getRegisteredToolDefinition: (toolName: string) =>
 			toolName === "read" && options?.customReadRenderer
 				? options.customReadRenderer
-				: withBuiltInRenderers(toolName, undefined),
+				: toolName === "bash" && options?.customBashRenderer
+					? options.customBashRenderer
+					: withBuiltInRenderers(toolName, undefined),
 		getMarkdownThemeWithSettings: proto.getMarkdownThemeWithSettings,
 		getMarkdownTransformers: () => [],
 		addMessageToChat(message: AgentMessage) {
@@ -243,13 +246,131 @@ describe("ReadGroupComponent", () => {
 		expect(doneOutput).not.toContain("FIRST_FILE_BODY");
 		expect(doneOutput).not.toContain("SECOND_FILE_BODY");
 		const renderedLines = group.render(120);
-		expect(renderedLines.find((line) => stripAnsi(line).includes("⏺"))).toContain(theme.fg("success", "⏺"));
+		// The header is a dim status line in the assistant text column: no status bullet, bold counts.
+		expect(renderedLines.some((line) => stripAnsi(line).includes("⏺"))).toBe(false);
+		const headerLine = renderedLines.find((line) => stripAnsi(line).includes("Read 2 files"))!;
+		expect(stripAnsi(headerLine).indexOf("Read")).toBe(3);
+		expect(headerLine).toContain(theme.fg("dim", theme.bold("2")));
+		expect(headerLine).not.toContain(theme.getFgAnsi("toolTitle"));
 		const firstFileLine = renderedLines.find((line) => stripAnsi(line).includes("src/a.ts:1-20"));
 		expect(firstFileLine).toContain(theme.fg("muted", "src/a.ts"));
 		expect(firstFileLine).toContain(theme.fg("muted", ":1-20"));
 		expect(firstFileLine).not.toContain(theme.getFgAnsi("accent"));
 		expect(firstFileLine).not.toContain(theme.getFgAnsi("warning"));
 
+		group.dispose();
+	});
+
+	it("summarizes mixed read, ls, grep, find and shell calls in one Claude-style header", () => {
+		const ui = createFakeTui();
+		const group = new ReadGroupComponent({ showImages: false }, ui, "/repo");
+
+		const read = group.addCall("r1", { path: "src/a.ts" }, "read");
+		const ls = group.addCall("l1", { path: "src" }, "ls");
+		const grep = group.addCall("g1", { pattern: "TODO", path: "src" }, "grep");
+		const find = group.addCall("f1", { pattern: "*.test.ts" }, "find");
+		const bash = group.addCall("b1", { command: "npm test\n--watch=false" }, "bash");
+		expect(ls.getToolName()).toBe("ls");
+		expect(bash.getToolName()).toBe("bash");
+
+		for (const handle of [read, ls, grep, find]) {
+			handle.markExecutionStarted();
+			handle.updateResult({ content: [{ type: "text", text: "HIDDEN_BODY" }], isError: false });
+		}
+		bash.markExecutionStarted();
+		bash.updateResult(
+			{
+				content: [{ type: "text", text: "line 1\nline 2\nPROGRESS_5\nPROGRESS_6\nPROGRESS_7\nPROGRESS_8" }],
+				isError: false,
+			},
+			true,
+		);
+
+		const running = renderComponent(group);
+		expect(running).toContain("Read 1 file, listed 1 directory, searched for 2 patterns, running 1 shell command...");
+		expect(running).toContain("└─ src/a.ts");
+		expect(running).toContain("└─ src");
+		expect(running).toContain("└─ /TODO/ in src");
+		expect(running).toContain("└─ *.test.ts in .");
+		expect(running).toContain("└─ $ npm test …");
+		// Live tail keeps the last four non-empty lines only.
+		expect(running).toContain("PROGRESS_8");
+		expect(running).toContain("PROGRESS_5");
+		expect(running).not.toContain("line 2");
+		expect(running).not.toContain("HIDDEN_BODY");
+
+		bash.updateResult(
+			{ content: [{ type: "text", text: "FAILED_OUTPUT\n\nCommand exited with code 2" }], isError: true },
+			false,
+		);
+		group.setPreviewCollapsed(true);
+		const done = renderComponent(group);
+		expect(done).toContain("Read 1 file, listed 1 directory, searched for 2 patterns, ran 1 shell command");
+		expect(done).not.toContain("...");
+		expect(done).toContain("└─ $ npm test … exit 2");
+		expect(done).not.toContain("FAILED_OUTPUT");
+
+		group.setExpanded(true);
+		const expanded = renderComponent(group);
+		expect(expanded).toContain("FAILED_OUTPUT");
+		expect(expanded).toContain("HIDDEN_BODY");
+
+		group.dispose();
+	});
+
+	it("keeps a finished shell preview visible until previews collapse and marks failures without exit codes", () => {
+		const ui = createFakeTui();
+		const group = new ReadGroupComponent({ showImages: false }, ui, "/repo");
+		const bash = group.addCall("b1", { command: "echo hi" }, "bash");
+		bash.markExecutionStarted();
+		bash.updateResult({ content: [{ type: "text", text: "SHELL_OUT" }], isError: false });
+		expect(renderComponent(group)).toContain("Ran 1 shell command");
+		expect(renderComponent(group)).toContain("SHELL_OUT");
+
+		group.setPreviewCollapsed(true);
+		expect(renderComponent(group)).not.toContain("SHELL_OUT");
+
+		const failing = group.addCall("b2", { command: "false" }, "bash");
+		failing.updateResult({ content: [{ type: "text", text: "Operation aborted" }], isError: true });
+		expect(renderComponent(group)).toContain("Ran 2 shell commands");
+		expect(renderComponent(group)).toContain("└─ $ false failed");
+
+		group.dispose();
+	});
+
+	it("lists every call during the turn and folds to the header when previews collapse at turn end", () => {
+		const ui = createFakeTui();
+		const group = new ReadGroupComponent({ showImages: false }, ui, "/repo");
+		const read = group.addCall("r1", { path: "src/a.ts" }, "read");
+		const bash = group.addCall("b1", { command: "npm test" }, "bash");
+		read.markExecutionStarted();
+		bash.markExecutionStarted();
+		read.updateResult({ content: [{ type: "text", text: "BODY" }], isError: false });
+		bash.updateResult({ content: [{ type: "text", text: "TICK\nCommand exited with code 0" }], isError: false });
+		const failing = group.addCall("b2", { command: "false" }, "bash");
+		failing.updateResult({ content: [{ type: "text", text: "Command exited with code 1" }], isError: true });
+
+		// During the turn, finished calls stay listed so the user can see what was read and run.
+		const during = renderComponent(group);
+		expect(during).toContain("Read 1 file, ran 2 shell commands");
+		expect(during).toContain("└─ src/a.ts");
+		expect(during).toContain("└─ $ npm test");
+		expect(during).toContain("TICK");
+		expect(during).toContain("└─ $ false exit 1");
+
+		// Turn end: successful calls fold away; the failure stays visible.
+		group.setPreviewCollapsed(true);
+		const folded = renderComponent(group);
+		expect(folded).toContain("Read 1 file, ran 2 shell commands");
+		expect(folded).not.toContain("└─ src/a.ts");
+		expect(folded).not.toContain("└─ $ npm test");
+		expect(folded).not.toContain("TICK");
+		expect(folded).toContain("└─ $ false exit 1");
+
+		// Ctrl+O shows everything again.
+		group.setExpanded(true);
+		expect(renderComponent(group)).toContain("└─ src/a.ts");
+		expect(renderComponent(group)).toContain("└─ $ npm test");
 		group.dispose();
 	});
 
@@ -301,7 +422,7 @@ describe("ReadGroupComponent", () => {
 		group.dispose();
 	});
 
-	it("shows red status bullet and concise error summary when a read fails", () => {
+	it("shows a concise red error summary on the failed call's line when a read fails", () => {
 		const ui = createFakeTui();
 		const group = new ReadGroupComponent({ showImages: false }, ui, "/repo");
 
@@ -311,7 +432,10 @@ describe("ReadGroupComponent", () => {
 		bad.updateResult({ content: [{ type: "text", text: "ENOENT: no such file\nstack line" }], isError: true });
 
 		const rendered = group.render(120);
-		expect(rendered.find((line) => stripAnsi(line).includes("⏺"))).toContain(theme.fg("error", "⏺"));
+		expect(rendered.some((line) => stripAnsi(line).includes("⏺"))).toBe(false);
+		expect(rendered.find((line) => stripAnsi(line).includes("src/missing.ts"))).toContain(
+			theme.fg("error", "ENOENT: no such file"),
+		);
 		const plain = stripAnsi(rendered.join("\n"));
 		expect(plain).toContain("Read 2 files");
 		expect(plain).toContain("└─ src/missing.ts ENOENT: no such file");
@@ -339,6 +463,51 @@ describe("InteractiveMode consecutive read grouping", () => {
 			renderSessionEntries: (this: FakeInteractiveContext, entries: SessionEntry[]) => void;
 		}
 	).renderSessionEntries;
+
+	it("joins consecutive read, bash and ls calls into one activity group", async () => {
+		const ctx = createFakeInteractiveContext();
+		await handleEvent.call(ctx, { type: "agent_start" });
+		const calls = [
+			{ id: "r1", name: "read", args: { path: "src/a.ts" } },
+			{ id: "b1", name: "bash", args: { command: "git status" } },
+			{ id: "l1", name: "ls", args: { path: "src" } },
+		];
+		for (const call of calls) {
+			await handleEvent.call(ctx, {
+				type: "tool_execution_start",
+				toolCallId: call.id,
+				toolName: call.name,
+				args: call.args,
+			});
+			await handleEvent.call(ctx, {
+				type: "tool_execution_end",
+				toolCallId: call.id,
+				toolName: call.name,
+				result: { content: [{ type: "text", text: "OK" }], details: undefined },
+				isError: false,
+			});
+		}
+		const groups = ctx.chatContainer.children.filter((c) => c instanceof ReadGroupComponent);
+		expect(groups).toHaveLength(1);
+		expect(ctx.chatContainer.children.some((c) => c instanceof ToolExecutionComponent)).toBe(false);
+		expect(renderComponent(groups[0]!)).toContain("Read 1 file, ran 1 shell command, listed 1 directory");
+	});
+
+	it("keeps a bash call with an extension renderer out of the activity group", async () => {
+		const ctx = createFakeInteractiveContext({
+			customBashRenderer: { renderCall: () => new Text("CUSTOM_BASH", 0, 0) },
+		});
+		await handleEvent.call(ctx, { type: "agent_start" });
+		await handleEvent.call(ctx, {
+			type: "tool_execution_start",
+			toolCallId: "b1",
+			toolName: "bash",
+			args: { command: "echo hi" },
+		});
+		expect(ctx.chatContainer.children.some((c) => c instanceof ReadGroupComponent)).toBe(false);
+		expect(ctx.chatContainer.children.some((c) => c instanceof ToolExecutionComponent)).toBe(true);
+		expect(renderComponent(ctx.chatContainer)).toContain("CUSTOM_BASH");
+	});
 
 	it("groups consecutive reads across turns (N+1) and resets to 1 when broken by another tool, text, or agent_end", async () => {
 		const ctx = createFakeInteractiveContext();
@@ -406,18 +575,18 @@ describe("InteractiveMode consecutive read grouping", () => {
 			isError: false,
 		});
 
-		// Turn 3: bash breaks continuity, then read d.ts restarts from 1
+		// Turn 3: write (not an exploration tool) breaks continuity, then read d.ts restarts from 1
 		await handleEvent.call(ctx, {
 			type: "tool_execution_start",
-			toolCallId: "b1",
-			toolName: "bash",
-			args: { command: "echo hi" },
+			toolCallId: "w1",
+			toolName: "write",
+			args: { path: "src/out.ts", content: "hi" },
 		});
 		await handleEvent.call(ctx, {
 			type: "tool_execution_end",
-			toolCallId: "b1",
-			toolName: "bash",
-			result: { content: [{ type: "text", text: "hi" }], details: undefined },
+			toolCallId: "w1",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "Wrote 1 line" }], details: undefined },
 			isError: false,
 		});
 		await handleEvent.call(ctx, {
@@ -477,24 +646,25 @@ describe("InteractiveMode consecutive read grouping", () => {
 		const readGroups = ctx.chatContainer.children.filter((c) => c instanceof ReadGroupComponent);
 		expect(readGroups).toHaveLength(4);
 		expect(renderComponent(readGroups[0]!)).toContain("Read 3 files");
-		expect(renderComponent(readGroups[0]!)).toContain("└─ src/a.ts");
-		expect(renderComponent(readGroups[0]!)).toContain("└─ src/b.ts");
-		expect(renderComponent(readGroups[0]!)).toContain("└─ src/c.ts");
 		expect(renderComponent(readGroups[1]!)).toContain("Read 1 file");
-		expect(renderComponent(readGroups[1]!)).toContain("└─ src/d.ts");
 		expect(renderComponent(readGroups[2]!)).toContain("Read 1 file");
-		expect(renderComponent(readGroups[2]!)).toContain("└─ src/e.ts");
 		expect(renderComponent(readGroups[3]!)).toContain("Read 1 file");
-		expect(renderComponent(readGroups[3]!)).toContain("└─ src/f.ts");
 
-		// None of the file bodies are shown while collapsed
+		// Finished groups collapse to their header: no paths and no file bodies.
 		const fullChat = renderComponent(ctx.chatContainer);
+		expect(fullChat).not.toContain("└─ src/a.ts");
 		expect(fullChat).not.toContain("A_BODY");
 		expect(fullChat).not.toContain("D_BODY");
 
-		// Global expand (Ctrl+O) reveals file bodies
+		// Global expand (Ctrl+O) reveals each group's paths and file bodies
 		ctx.setToolsExpanded(true);
 		const expandedChat = renderComponent(ctx.chatContainer);
+		expect(renderComponent(readGroups[0]!)).toContain("└─ src/a.ts");
+		expect(renderComponent(readGroups[0]!)).toContain("└─ src/b.ts");
+		expect(renderComponent(readGroups[0]!)).toContain("└─ src/c.ts");
+		expect(renderComponent(readGroups[1]!)).toContain("└─ src/d.ts");
+		expect(renderComponent(readGroups[2]!)).toContain("└─ src/e.ts");
+		expect(renderComponent(readGroups[3]!)).toContain("└─ src/f.ts");
 		expect(expandedChat).toContain("A_BODY");
 		expect(expandedChat).toContain("D_BODY");
 	});
@@ -523,11 +693,13 @@ describe("InteractiveMode consecutive read grouping", () => {
 		const readGroups = ctx.chatContainer.children.filter((c) => c instanceof ReadGroupComponent);
 		expect(readGroups).toHaveLength(2);
 		expect(renderComponent(readGroups[0]!)).toContain("Read 2 files");
+		expect(renderComponent(readGroups[1]!)).toContain("Read 1 file");
+		expect(renderComponent(ctx.chatContainer)).not.toContain("└─ a.ts");
+		expect(renderComponent(ctx.chatContainer)).not.toContain("A_TEXT");
+		ctx.setToolsExpanded(true);
 		expect(renderComponent(readGroups[0]!)).toContain("└─ a.ts");
 		expect(renderComponent(readGroups[0]!)).toContain("└─ b.ts");
-		expect(renderComponent(readGroups[1]!)).toContain("Read 1 file");
 		expect(renderComponent(readGroups[1]!)).toContain("└─ c.ts");
-		expect(renderComponent(ctx.chatContainer)).not.toContain("A_TEXT");
 	});
 
 	it("preserves custom extension read renderers via ToolExecutionComponent", async () => {

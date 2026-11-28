@@ -384,18 +384,24 @@ describe("InteractiveMode auto-collapse tool output", () => {
 
 		await handleEvent.call(ctx, { type: "agent_end", messages: [], willRetry: false });
 		const finalOutput = renderComponent(ctx.chatContainer);
-		expect(finalOutput).toContain("Bash(echo live)");
+		expect(finalOutput).toContain("Ran 1 shell command");
+		expect(finalOutput).toContain("└─ $ echo live failed");
 		expect(finalOutput).not.toContain("LIVE_OUTPUT");
 		expect(finalOutput).toContain("Edit(src/edit.ts)");
 		expect(finalOutput).toContain("LIVE_EDIT_DIFF");
 		expect(finalOutput).toContain("Write(src/new.ts)");
 		expect(finalOutput).toContain("└─ Wrote 1 line");
 		expect(finalOutput).not.toContain("LIVE_WRITE_BODY");
+		// Finished, successful calls collapse to the group header; failed ones keep their line.
 		expect(finalOutput).toContain("Read 2 files");
-		expect(finalOutput).toContain("└─ src/a.ts");
-		expect(finalOutput).toContain("└─ src/b.ts");
+		expect(finalOutput).not.toContain("└─ src/a.ts");
+		expect(finalOutput).not.toContain("└─ src/b.ts");
 		expect(finalOutput).not.toContain("LIVE_READ_A_1");
 		expect(finalOutput).not.toContain("LIVE_READ_B_1");
+		ctx.setToolsExpanded(true);
+		const expandedOutput = renderComponent(ctx.chatContainer);
+		expect(expandedOutput).toContain("└─ src/a.ts");
+		expect(expandedOutput).toContain("└─ src/b.ts");
 	});
 
 	it("keeps tools expanded across turns when globally expanded, then collapses on global collapse", async () => {
@@ -549,7 +555,8 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		const collapsedCtx = createFakeInteractiveContext({ collapseToolOutput: true });
 		renderSessionEntries.call(collapsedCtx, entries);
 		const collapsedOutput = renderComponent(collapsedCtx.chatContainer);
-		expect(collapsedOutput).toContain("Bash(echo ok)");
+		expect(collapsedOutput).toContain("Ran 3 shell commands");
+		expect(collapsedOutput).toContain("└─ $ echo ok");
 		expect(collapsedOutput).not.toContain("RESUMED_OK_OUTPUT");
 		expect(collapsedOutput).not.toContain("RESUMED_ERR_OUTPUT");
 		expect(collapsedOutput).toContain("RESUMED_EDIT_DIFF");
@@ -557,7 +564,7 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		expect(collapsedOutput).toContain("└─ Wrote 1 line");
 		expect(collapsedOutput).not.toContain("RESUMED_WRITE_BODY");
 		expect(collapsedOutput).toContain("Read 1 file");
-		expect(collapsedOutput).toContain("└─ src/read.ts");
+		expect(collapsedOutput).not.toContain("└─ src/read.ts");
 		expect(collapsedOutput).not.toContain("RESUMED_READ_1");
 
 		const previewCtx = createFakeInteractiveContext({ collapseToolOutput: false });
@@ -565,5 +572,7 @@ describe("InteractiveMode auto-collapse tool output", () => {
 		const previewOutput = renderComponent(previewCtx.chatContainer);
 		expect(previewOutput).toContain("RESUMED_OK_OUTPUT");
 		expect(previewOutput).toContain("RESUMED_ERR_OUTPUT");
+		// With collapsing off, finished calls stay listed under the group header.
+		expect(previewOutput).toContain("└─ src/read.ts");
 	});
 });

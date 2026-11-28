@@ -73,7 +73,8 @@ export class ProgramStatusReporter {
 				this.restingStatus = event.aborted ? { state: "idle" } : this.runResult;
 				break;
 			case "session_info_changed":
-				// The session name is part of working and done reports.
+			case "cwd_changed":
+				// Session name and project path are part of working and done reports.
 				break;
 			default:
 				return;

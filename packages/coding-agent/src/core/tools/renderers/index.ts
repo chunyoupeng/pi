@@ -8,7 +8,7 @@
 
 import type { ToolRenderers } from "../../extensions/types.ts";
 import type { ToolName } from "../index.ts";
-import { createShellRenderers } from "./bash.ts";
+import { createShellRenderers, isBuiltInShellRenderers } from "./bash.ts";
 import { editRenderers } from "./edit.ts";
 import { findRenderers } from "./find.ts";
 import { grepRenderers } from "./grep.ts";
@@ -23,6 +23,7 @@ export {
 	editRenderers,
 	findRenderers,
 	grepRenderers,
+	isBuiltInShellRenderers,
 	lsRenderers,
 	readRenderers,
 	writeRenderers,

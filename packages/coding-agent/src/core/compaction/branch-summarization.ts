@@ -180,6 +180,7 @@ function getMessageFromEntry(entry: SessionEntry, edit?: ContextEditEntry): Agen
 		// These don't contribute to conversation content
 		case "thinking_level_change":
 		case "model_change":
+		case "cwd_change":
 		case "custom":
 		case "label":
 		case "session_info":

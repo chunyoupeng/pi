@@ -13,7 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import {
 	type AfterToolCallContext,
@@ -57,9 +57,11 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai/compat";
+import { getAgentDir } from "../config.ts";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
+import { pathsEqual, resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
@@ -102,6 +104,7 @@ import {
 	type SessionBoundaryDraft,
 	type SessionCompactFailedEvent,
 	type SessionStartEvent,
+	type SetCwdResult,
 	type ShutdownHandler,
 	type ToolDefinition,
 	type ToolExecutionEndEvent,
@@ -150,6 +153,7 @@ import {
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./trust-manager.ts";
 import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
 import {
 	findLatestResponse,
@@ -224,6 +228,7 @@ export type AgentSessionEvent =
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
+	| { type: "cwd_changed"; previousCwd: string; cwd: string }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -269,6 +274,8 @@ export interface AgentSessionConfig {
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
 	cwd: string;
+	/** Global agent config directory (defaults to getAgentDir()). */
+	agentDir?: string;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 	/** Resource loader for extensions, skills, prompts, themes, context files, and system prompt */
@@ -471,6 +478,7 @@ export class AgentSession {
 	private _customTools: ToolDefinition[];
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
 	private _cwd: string;
+	private _agentDir: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
 	/**
@@ -527,7 +535,8 @@ export class AgentSession {
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
-		this._cwd = config.cwd;
+		this._cwd = resolvePath(config.cwd);
+		this._agentDir = config.agentDir ? resolvePath(config.agentDir) : getAgentDir();
 		this._modelRuntime = config.modelRuntime;
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
@@ -565,6 +574,11 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	/** Current active working directory for tools, extensions, and project context. */
+	get cwd(): string {
+		return this._cwd;
 	}
 
 	private async _getRequiredRequestAuth(
@@ -3576,7 +3590,10 @@ export class AgentSession {
 					});
 				},
 				appendEntry: (customType, data) => {
-					const entryId = this.sessionManager.appendCustomEntry(customType, data);
+					// Same position the live chat splits the streaming message at, so replay can do the same.
+					const streaming = this.agent.state.streamingMessage;
+					const streamContentIndex = streaming?.role === "assistant" ? streaming.content.length : undefined;
+					const entryId = this.sessionManager.appendCustomEntry(customType, data, streamContentIndex);
 					const entry = this.sessionManager.getEntry(entryId);
 					if (entry) {
 						this._emit({ type: "entry_appended", entry });
@@ -3604,6 +3621,7 @@ export class AgentSession {
 				},
 				getThinkingLevel: () => this.thinkingLevel,
 				setThinkingLevel: (level) => this.setThinkingLevel(level),
+				setCwd: (cwd) => this.setCwd(cwd),
 			},
 			{
 				getModel: () => this.model,
@@ -4122,6 +4140,74 @@ export class AgentSession {
 		void this._extensionRunner.emit(event);
 	}
 
+	/**
+	 * Switch the active working directory of the current session without interrupting an active turn.
+	 * Updates tool/extension `cwd`, reloads declarative project context (AGENTS.md, skills, prompts),
+	 * records a `cwd_change` entry in the session branch, and emits `cwd_changed`.
+	 */
+	async setCwd(targetPath: string, options?: { recordInSession?: boolean }): Promise<SetCwdResult> {
+		const nextCwd = resolvePath(targetPath, this._cwd);
+		if (!existsSync(nextCwd)) {
+			throw new Error(`Directory does not exist: ${nextCwd}`);
+		}
+		if (!statSync(nextCwd).isDirectory()) {
+			throw new Error(`Path is not a directory: ${nextCwd}`);
+		}
+
+		const previousCwd = this._cwd;
+		const changed = !pathsEqual(previousCwd, nextCwd);
+		const hasTrustRequiringResources = hasTrustRequiringProjectResources(nextCwd);
+		const storedTrust = new ProjectTrustStore(this._agentDir).get(nextCwd);
+		const projectTrusted =
+			storedTrust !== null
+				? storedTrust
+				: !hasTrustRequiringResources || this.settingsManager.getDefaultProjectTrust() === "always";
+
+		if (changed) {
+			this._cwd = nextCwd;
+			this._extensionRunner.setCwd(nextCwd);
+
+			if (options?.recordInSession !== false) {
+				const entryId = this.sessionManager.appendCwdChange(nextCwd);
+				const entry = this.sessionManager.getEntry(entryId);
+				if (entry) {
+					this._emit({ type: "entry_appended", entry });
+				}
+			}
+
+			await this._resourceLoader.setCwd?.(nextCwd, { projectTrusted });
+			this._rebuildSystemPrompt(this.getActiveToolNames());
+
+			if (this._runSystemPromptOptions) {
+				this._runSystemPromptOptions = normalizeBuildSystemPromptOptions({
+					...this._runSystemPromptOptions,
+					cwd: this._baseSystemPromptOptions.cwd,
+					contextFiles: this._baseSystemPromptOptions.contextFiles,
+					skills: this._baseSystemPromptOptions.skills,
+					customPrompt: this._baseSystemPromptOptions.customPrompt,
+					appendSystemPrompt: this._baseSystemPromptOptions.appendSystemPrompt,
+				});
+			}
+
+			await this._extensionRunner.emit({
+				type: "cwd_changed",
+				previousCwd,
+				cwd: nextCwd,
+				systemPromptSections: this._runSystemPromptOptions?.sections,
+			});
+			this._emit({ type: "cwd_changed", previousCwd, cwd: nextCwd });
+		}
+
+		return {
+			previousCwd,
+			cwd: nextCwd,
+			changed,
+			contextFiles: this._resourceLoader.getAgentsFiles().agentsFiles.map((file) => file.path),
+			hasTrustRequiringResources,
+			projectTrusted,
+		};
+	}
+
 	// =========================================================================
 	// Tree Navigation
 	// =========================================================================
@@ -4313,6 +4399,11 @@ export class AgentSession {
 			// Update finalized context from the canonical session projection.
 			this._refreshFinalizedContext();
 			this._restoreToolsFromTranscript();
+
+			const branchCwd = this.sessionManager.getCwd();
+			if (!pathsEqual(branchCwd, this._cwd) && existsSync(branchCwd) && statSync(branchCwd).isDirectory()) {
+				await this.setCwd(branchCwd, { recordInSession: false });
+			}
 
 			// The selected context is installed; session_tree handlers may now prompt or navigate again.
 			this._branchSummaryAbortController = undefined;

@@ -96,6 +96,14 @@ describe("ExtensionRunner", () => {
 		setModel: async () => false,
 		getThinkingLevel: () => "off",
 		setThinkingLevel: () => {},
+		setCwd: async (cwd) => ({
+			previousCwd: cwd,
+			cwd,
+			changed: false,
+			contextFiles: [],
+			hasTrustRequiringResources: false,
+			projectTrusted: true,
+		}),
 	};
 
 	const extensionContextActions: ExtensionContextActions = {

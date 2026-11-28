@@ -438,6 +438,9 @@
           case 'thinking_level_change':
             parts.push('thinking', entry.thinkingLevel);
             break;
+          case 'cwd_change':
+            parts.push('cwd', entry.cwd);
+            break;
           case 'context_edit':
             parts.push('context edit', entry.replacement === null ? 'omit' : 'replace', entry.targetId);
             break;
@@ -469,7 +472,7 @@
           }
 
           // Apply filter mode
-          const isSettingsEntry = ['label', 'custom', 'context_edit', 'model_change', 'thinking_level_change'].includes(entry.type);
+          const isSettingsEntry = ['label', 'custom', 'context_edit', 'model_change', 'thinking_level_change', 'cwd_change'].includes(entry.type);
           let passesFilter = true;
 
           switch (filterMode) {
@@ -779,6 +782,8 @@
             return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
           case 'thinking_level_change':
             return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+          case 'cwd_change':
+            return labelHtml + `<span class="tree-muted">[cwd: ${escapeHtml(entry.cwd)}]</span>`;
           case 'context_edit':
             return labelHtml + `<span class="tree-muted">[context ${entry.replacement === null ? 'omit' : 'replace'}: ${escapeHtml(entry.targetId)}]</span>`;
           default:

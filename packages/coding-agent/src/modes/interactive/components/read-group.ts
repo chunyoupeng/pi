@@ -11,7 +11,12 @@ import {
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 import type { ReadToolDetails } from "../../../core/tools/read.ts";
-import { getTextOutput as getRenderedTextOutput, renderToolPath, str } from "../../../core/tools/render-utils.ts";
+import {
+	getTextOutput as getRenderedTextOutput,
+	renderToolPath,
+	shortenPath,
+	str,
+} from "../../../core/tools/render-utils.ts";
 import { formatReadResult, type ReadRenderArgs, styledReadLineRange } from "../../../core/tools/renderers/read.ts";
 import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
@@ -19,16 +24,47 @@ import { DynamicText } from "./dynamic-text.ts";
 import { Gutter } from "./gutter.ts";
 import type { ToolCallHandle, ToolExecutionOptions, ToolExecutionResult } from "./tool-execution.ts";
 
-const STATUS_BULLET = "⏺";
-const RUNNING_BULLET_FRAMES = ["border", "dim"] as const;
-const RUNNING_BULLET_INTERVAL_MS = 500;
+/** Re-render interval while a call runs, so live shell output and the header stay current. */
+const RUNNING_REFRESH_INTERVAL_MS = 500;
 const CALL_GUTTER_WIDTH = 2;
 const FILE_GUTTER_WIDTH = 5;
 const FILE_BRANCH = "└─";
 const ERROR_SUMMARY_MAX_WIDTH = 80;
+const SHELL_COMMAND_MAX_WIDTH = 100;
+/** Output lines shown under a shell command while its preview is visible. */
+const SHELL_PREVIEW_LINES = 4;
+
+/** What a grouped call did, which decides its verb and noun in the group header. */
+export type ActivityKind = "read" | "list" | "search" | "shell";
+
+/** Built-in tools that join an activity group, by the kind of activity they count as. */
+export const ACTIVITY_KIND_BY_TOOL: Readonly<Record<string, ActivityKind>> = {
+	read: "read",
+	ls: "list",
+	grep: "search",
+	find: "search",
+	bash: "shell",
+	powershell: "shell",
+};
+
+const ACTIVITY_LABELS: Readonly<Record<ActivityKind, { done: string; running: string; one: string; many: string }>> = {
+	read: { done: "Read", running: "Reading", one: "file", many: "files" },
+	list: { done: "Listed", running: "Listing", one: "directory", many: "directories" },
+	search: { done: "Searched for", running: "Searching for", one: "pattern", many: "patterns" },
+	shell: { done: "Ran", running: "Running", one: "shell command", many: "shell commands" },
+};
+
+interface ActivityArgs {
+	file_path?: unknown;
+	path?: unknown;
+	pattern?: unknown;
+	command?: unknown;
+}
 
 interface ReadGroupEntry {
 	readonly toolCallId: string;
+	readonly toolName: string;
+	readonly kind: ActivityKind;
 	args: ReadRenderArgs | undefined;
 	executionStarted: boolean;
 	argsComplete: boolean;
@@ -38,10 +74,12 @@ interface ReadGroupEntry {
 }
 
 /**
- * Compact grouped display for consecutive built-in `read` tool calls.
+ * Compact grouped display for consecutive built-in exploration calls (`read`, `ls`, `grep`, `find`, shell).
  *
- * Shows a single `Reading N files...` / `Read N files` header with one `└─ <path>` line per read,
- * expanding to full file contents when toggled via `Ctrl+O` or mouse click.
+ * Shows one summary header such as `Read 2 files, listed 1 directory, ran 3 shell commands` with one
+ * `└─ <target>` line per call. A running shell command also shows the tail of its live output. The whole
+ * group expands to full results when toggled via `Ctrl+O` or mouse click. Any assistant text between calls
+ * starts a new group, so a model that narrates its steps gets one summary line per step.
  */
 export class ReadGroupComponent extends Container {
 	private readonly contentBox: Box;
@@ -73,7 +111,8 @@ export class ReadGroupComponent extends Container {
 
 		this.addChild(new Spacer(1));
 		this.contentBox = new Box(0, 0);
-		this.callGutter = new Gutter({ width: CALL_GUTTER_WIDTH, marker: () => this.renderStatusBullet() });
+		// No status bullet: the header starts in the assistant text column; failures show on their `└─` line.
+		this.callGutter = new Gutter({ width: CALL_GUTTER_WIDTH, marker: () => "" });
 		this.contentRegion = new MouseRegion(this.contentBox, (event) => {
 			if (!this.hasAnyResult() || event.type !== "click" || event.button !== "left") return undefined;
 			this.setExpanded(!this.expanded);
@@ -83,9 +122,11 @@ export class ReadGroupComponent extends Container {
 		this.addChild(this.contentRegion);
 	}
 
-	addCall(toolCallId: string, args: unknown): ToolCallHandle {
+	addCall(toolCallId: string, args: unknown, toolName = "read"): ToolCallHandle {
 		const entry: ReadGroupEntry = {
 			toolCallId,
+			toolName,
+			kind: ACTIVITY_KIND_BY_TOOL[toolName] ?? "read",
 			args: args as ReadRenderArgs | undefined,
 			executionStarted: false,
 			argsComplete: false,
@@ -94,7 +135,7 @@ export class ReadGroupComponent extends Container {
 		this.entries.push(entry);
 
 		const handle: ToolCallHandle = {
-			getToolName: () => "read",
+			getToolName: () => entry.toolName,
 			updateArgs: (nextArgs) => {
 				entry.args = nextArgs as ReadRenderArgs | undefined;
 				this.argsPending = true;
@@ -185,6 +226,14 @@ export class ReadGroupComponent extends Container {
 		return super.render(width);
 	}
 
+	/**
+	 * Once previews collapse (turn end with `collapseToolOutput` on), successful calls drop out and a finished
+	 * group is just its header. During the turn every call stays listed; failed calls always stay listed.
+	 */
+	private isHiddenWhenCollapsed(entry: ReadGroupEntry): boolean {
+		return this.isPreviewHidden() && entry.result !== undefined && !entry.isPartial && !entry.result.isError;
+	}
+
 	private hasAnyResult(): boolean {
 		return this.entries.some((entry) => entry.result !== undefined);
 	}
@@ -201,22 +250,9 @@ export class ReadGroupComponent extends Container {
 		return this.previewCollapsed && !this.expanded;
 	}
 
-	private renderStatusBullet(): string {
-		if (this.isRunning()) {
-			const frame =
-				RUNNING_BULLET_FRAMES[Math.floor(Date.now() / RUNNING_BULLET_INTERVAL_MS) % RUNNING_BULLET_FRAMES.length];
-			return theme.fg(frame, STATUS_BULLET);
-		}
-		if (this.isInProgress()) {
-			return theme.fg("border", STATUS_BULLET);
-		}
-		const hasError = this.entries.some((entry) => entry.result?.isError);
-		return theme.fg(hasError ? "error" : "success", STATUS_BULLET);
-	}
-
 	private startBlink(): void {
 		if (this.blinkInterval || !this.isRunning()) return;
-		this.blinkInterval = setInterval(() => this.ui.requestRender(), RUNNING_BULLET_INTERVAL_MS);
+		this.blinkInterval = setInterval(() => this.ui.requestRender(), RUNNING_REFRESH_INTERVAL_MS);
 	}
 
 	private stopBlink(): void {
@@ -227,27 +263,117 @@ export class ReadGroupComponent extends Container {
 		}
 	}
 
+	/**
+	 * `Read 2 files, ran 1 shell command` in dim text with bold counts, like a quiet status line rather than
+	 * a tool title. Running kinds use the progressive verb and the header ends in `...`.
+	 */
 	private formatHeader(): string {
-		const count = this.entries.length;
-		const noun = count === 1 ? "file" : "files";
-		const label = this.isInProgress() ? `Reading ${count} ${noun}...` : `Read ${count} ${noun}`;
-		return theme.fg("toolTitle", theme.bold(label));
+		const order: ActivityKind[] = [];
+		const counts = new Map<ActivityKind, { total: number; running: boolean }>();
+		for (const entry of this.entries) {
+			let count = counts.get(entry.kind);
+			if (!count) {
+				count = { total: 0, running: false };
+				counts.set(entry.kind, count);
+				order.push(entry.kind);
+			}
+			count.total++;
+			if (!entry.result || entry.isPartial) count.running = true;
+		}
+		const parts = order.map((kind, index) => {
+			const { total, running } = counts.get(kind)!;
+			const labels = ACTIVITY_LABELS[kind];
+			const verb = running ? labels.running : labels.done;
+			const shownVerb = index === 0 ? verb : verb.charAt(0).toLowerCase() + verb.slice(1);
+			const noun = total === 1 ? labels.one : labels.many;
+			return `${theme.fg("dim", `${shownVerb} `)}${theme.fg("dim", theme.bold(String(total)))}${theme.fg("dim", ` ${noun}`)}`;
+		});
+		const suffix = this.isInProgress() ? theme.fg("dim", "...") : "";
+		return `${parts.join(theme.fg("dim", ", "))}${suffix}`;
 	}
 
-	private formatEntryPath(entry: ReadGroupEntry): string {
-		const rawPath = str(entry.args?.file_path ?? entry.args?.path);
-		const pathDisplay = renderToolPath(rawPath, theme, this.cwd, { color: "muted" });
-		const range = styledReadLineRange(entry.args, theme, "muted");
-		let text = `${pathDisplay}${range}`;
-		if (!this.expanded && entry.result?.isError) {
-			const firstErrorLine = getRenderedTextOutput(entry.result, this.showImages)
-				.split("\n")
-				.map((line) => line.trim())
-				.find((line) => line.length > 0);
-			const summary = firstErrorLine ? truncateToWidth(firstErrorLine, ERROR_SUMMARY_MAX_WIDTH, "…") : "error";
-			text += ` ${theme.fg("error", summary)}`;
+	private formatEntryTarget(entry: ReadGroupEntry): string {
+		const args = entry.args as ActivityArgs | undefined;
+		switch (entry.kind) {
+			case "read":
+				return `${renderToolPath(str(args?.file_path ?? args?.path), theme, this.cwd, { color: "muted" })}${styledReadLineRange(entry.args, theme, "muted")}`;
+			case "list":
+				return renderToolPath(str(args?.path), theme, this.cwd, { color: "muted", emptyFallback: "." });
+			case "search": {
+				const pattern = str(args?.pattern) ?? "";
+				const shown = entry.toolName === "grep" ? `/${pattern}/` : pattern;
+				const where = shortenPath(str(args?.path) || ".");
+				return `${theme.fg("muted", shown)}${theme.fg("dim", ` in ${where}`)}`;
+			}
+			case "shell": {
+				const command = str(args?.command) ?? "";
+				const lines = command.split("\n");
+				const firstLine = lines.length > 1 ? `${lines[0]} …` : command;
+				const prompt = entry.toolName === "powershell" ? "PS>" : "$";
+				return theme.fg("muted", truncateToWidth(`${prompt} ${firstLine || "..."}`, SHELL_COMMAND_MAX_WIDTH, "…"));
+			}
 		}
-		return text;
+	}
+
+	private formatEntryLine(entry: ReadGroupEntry): string {
+		const text = this.formatEntryTarget(entry);
+		if (this.expanded || !entry.result?.isError) return text;
+		const output = getRenderedTextOutput(entry.result, this.showImages);
+		if (entry.kind === "shell") {
+			// Shell output can be long and noisy; the collapsed line only says how the command ended.
+			const exitCode = output.match(/exited with code (\d+)/)?.[1];
+			return `${text} ${theme.fg("error", exitCode !== undefined ? `exit ${exitCode}` : "failed")}`;
+		}
+		const firstErrorLine = output
+			.split("\n")
+			.map((line) => line.trim())
+			.find((line) => line.length > 0);
+		const summary = firstErrorLine ? truncateToWidth(firstErrorLine, ERROR_SUMMARY_MAX_WIDTH, "…") : "error";
+		return `${text} ${theme.fg("error", summary)}`;
+	}
+
+	/**
+	 * Tail of a shell command's output while it runs, and until the turn's previews collapse
+	 * (never, with `collapseToolOutput` off), so long commands show progress without filling the screen.
+	 */
+	private formatShellPreview(entry: ReadGroupEntry): string | undefined {
+		if (entry.kind !== "shell" || !entry.result) return undefined;
+		if (this.isPreviewHidden() && !entry.isPartial) return undefined;
+		const lines = getRenderedTextOutput(entry.result, false)
+			.split("\n")
+			.filter((line) => line.trim().length > 0);
+		if (lines.length === 0) return undefined;
+		const color = entry.result.isError ? "error" : "dim";
+		return lines
+			.slice(-SHELL_PREVIEW_LINES)
+			.map((line) => theme.fg(color, line))
+			.join("\n");
+	}
+
+	private buildExpandedBody(entry: ReadGroupEntry, result: ToolExecutionResult): DynamicText | Text {
+		if (entry.kind !== "read") {
+			const output = getRenderedTextOutput(result, this.showImages).trimEnd();
+			const color = result.isError ? "error" : "toolOutput";
+			return new Text(output ? theme.fg(color, output) : theme.fg("dim", "(no output)"), 0, 0);
+		}
+		const resultText = entry.resultComponent ?? new DynamicText();
+		entry.resultComponent = resultText;
+		resultText.setBuilder((width) =>
+			formatReadResult(
+				entry.args,
+				{
+					content: result.content as (TextContent | ImageContent)[],
+					details: result.details as ReadToolDetails | undefined,
+				},
+				{ expanded: true, isPartial: entry.isPartial },
+				theme,
+				this.showImages,
+				this.cwd,
+				result.isError,
+				width,
+			),
+		);
+		return resultText;
 	}
 
 	private updateDisplay(): void {
@@ -261,36 +387,26 @@ export class ReadGroupComponent extends Container {
 			this.contentBox.addChild(this.callGutter);
 
 			for (const entry of this.entries) {
+				if (this.isHiddenWhenCollapsed(entry)) continue;
 				const fileGutter = new Gutter(
 					{
 						width: FILE_GUTTER_WIDTH,
 						marker: () => `  ${theme.fg("dim", FILE_BRANCH)}`,
 					},
-					new Text(this.formatEntryPath(entry), 0, 0),
+					new Text(this.formatEntryLine(entry), 0, 0),
 				);
 				this.contentBox.addChild(fileGutter);
 
 				if (this.expanded && entry.result) {
-					const result = entry.result;
-					const resultText = entry.resultComponent ?? new DynamicText();
-					entry.resultComponent = resultText;
-					resultText.setBuilder((width) =>
-						formatReadResult(
-							entry.args,
-							{
-								content: result.content as (TextContent | ImageContent)[],
-								details: result.details as ReadToolDetails | undefined,
-							},
-							{ expanded: true, isPartial: entry.isPartial },
-							theme,
-							this.showImages,
-							this.cwd,
-							result.isError,
-							width,
-						),
-					);
-					const bodyGutter = new Gutter({ width: FILE_GUTTER_WIDTH, marker: () => "" }, resultText);
-					this.contentBox.addChild(bodyGutter);
+					const body = this.buildExpandedBody(entry, entry.result);
+					this.contentBox.addChild(new Gutter({ width: FILE_GUTTER_WIDTH, marker: () => "" }, body));
+				} else {
+					const tail = this.formatShellPreview(entry);
+					if (tail) {
+						this.contentBox.addChild(
+							new Gutter({ width: FILE_GUTTER_WIDTH, marker: () => "" }, new Text(tail, 0, 0)),
+						);
+					}
 				}
 			}
 		}

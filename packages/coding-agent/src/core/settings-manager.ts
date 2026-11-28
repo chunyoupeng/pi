@@ -25,6 +25,7 @@ import type {
 	TransportSetting,
 	TuiMode,
 	WarningSettings,
+	WorkspaceSwitchPolicy,
 } from "./settings-schema.ts";
 
 export type {
@@ -51,6 +52,7 @@ export type {
 	TransportSetting,
 	TuiMode,
 	WarningSettings,
+	WorkspaceSwitchPolicy,
 } from "./settings-schema.ts";
 /** Cache-warming profile. "idle" also warms between agent runs. */
 export const CACHE_WARMING_MODES = ["off", "streaming", "idle"] as const satisfies readonly CacheWarmingMode[];
@@ -1031,6 +1033,29 @@ export class SettingsManager {
 	setDefaultProjectTrust(defaultProjectTrust: DefaultProjectTrust): void {
 		this.globalSettings.defaultProjectTrust = defaultProjectTrust;
 		this.markModified("defaultProjectTrust");
+		this.save();
+	}
+
+	getWorkspaceSwitchPolicy(): WorkspaceSwitchPolicy {
+		const value = this.settings.workspaceSwitchPolicy;
+		return value === "off" || value === "workspace" || value === "ask" || value === "allow"
+			? value
+			: SETTINGS_DEFAULTS.workspaceSwitchPolicy;
+	}
+
+	setWorkspaceSwitchPolicy(policy: WorkspaceSwitchPolicy): void {
+		this.globalSettings.workspaceSwitchPolicy = policy;
+		this.markModified("workspaceSwitchPolicy");
+		this.save();
+	}
+
+	getAllowedWorkspaces(): string[] {
+		return this.settings.allowedWorkspaces ? [...this.settings.allowedWorkspaces] : [];
+	}
+
+	setAllowedWorkspaces(paths: string[] | undefined): void {
+		this.globalSettings.allowedWorkspaces = paths ? [...paths] : undefined;
+		this.markModified("allowedWorkspaces");
 		this.save();
 	}
 

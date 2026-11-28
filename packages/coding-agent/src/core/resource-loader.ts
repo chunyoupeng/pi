@@ -192,6 +192,8 @@ export interface ResourceLoader {
 	getAppendSystemPromptSources(): Array<{ path: string }>;
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(options?: ResourceLoaderReloadOptions): Promise<void>;
+	/** Lightweight workspace switch: updates cwd and reloads declarative context (AGENTS.md, skills, prompts, system prompt files) without restarting extensions. */
+	setCwd?(cwd: string, options?: { projectTrusted?: boolean }): Promise<void>;
 }
 
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
@@ -683,6 +685,69 @@ export class DefaultResourceLoader implements ResourceLoader {
 			}
 		}
 
+		this.reloadPromptAndContextFiles(this.settingsManager.isProjectTrusted());
+		this.loaded = true;
+	}
+
+	async setCwd(cwd: string, options?: { projectTrusted?: boolean }): Promise<void> {
+		const resolved = resolvePath(cwd);
+		if (pathsEqual(this.cwd, resolved)) {
+			return;
+		}
+
+		this.cwd = resolved;
+		const effectiveTrusted = options?.projectTrusted ?? this.settingsManager.isProjectTrusted();
+		const targetSettings = SettingsManager.create(this.cwd, this.agentDir, { projectTrusted: effectiveTrusted });
+		const targetPackageManager = new DefaultPackageManager({
+			cwd: this.cwd,
+			agentDir: this.agentDir,
+			settingsManager: targetSettings,
+			builtinExtensions: [...this.builtinExtensions.keys()],
+		});
+		const skipMissing = async () => "skip" as const;
+		const resolvedPaths = await targetPackageManager.resolve(skipMissing);
+		const cliExtensionPaths = await targetPackageManager.resolveExtensionSources(this.additionalExtensionPaths, {
+			temporary: true,
+		});
+
+		const metadataByPath = new Map<string, PathMetadata>();
+		const getEnabledResources = (resources: ResolvedResource[]): ResolvedResource[] => {
+			for (const r of resources) {
+				if (!metadataByPath.has(r.path)) {
+					metadataByPath.set(r.path, r.metadata);
+				}
+			}
+			return resources.filter((r) => r.enabled);
+		};
+
+		const enabledSkillResources = getEnabledResources(resolvedPaths.skills);
+		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
+		const enabledPrompts = getEnabledResources(resolvedPaths.prompts).map((r) => r.path);
+
+		for (const r of cliExtensionPaths.skills) {
+			if (!metadataByPath.has(r.path)) {
+				metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
+			}
+		}
+		const cliEnabledSkills = getEnabledResources(cliExtensionPaths.skills).map((r) => r.path);
+		const cliEnabledPrompts = getEnabledResources(cliExtensionPaths.prompts).map((r) => r.path);
+
+		const skillPaths = this.noSkills
+			? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
+			: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
+		this.lastSkillPaths = skillPaths;
+		this.updateSkillsFromPaths(skillPaths, metadataByPath);
+
+		const promptPaths = this.noPromptTemplates
+			? this.mergePaths(cliEnabledPrompts, this.additionalPromptTemplatePaths)
+			: this.mergePaths([...cliEnabledPrompts, ...enabledPrompts], this.additionalPromptTemplatePaths);
+		this.lastPromptPaths = promptPaths;
+		this.updatePromptsFromPaths(promptPaths, metadataByPath);
+
+		this.reloadPromptAndContextFiles(effectiveTrusted);
+	}
+
+	private reloadPromptAndContextFiles(projectTrusted: boolean): void {
 		const agentsFiles = {
 			agentsFiles: this.noContextFiles
 				? []
@@ -694,7 +759,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
 
-		const systemPromptSource = this.systemPromptSource ?? this.discoverSystemPromptFile();
+		const systemPromptSource = this.systemPromptSource ?? this.discoverSystemPromptFile(projectTrusted);
 		const baseSystemPrompt = resolvePromptInput(systemPromptSource, "system prompt");
 		this.systemPrompt = this.systemPromptOverride ? this.systemPromptOverride(baseSystemPrompt) : baseSystemPrompt;
 		this.systemPromptSourcePath =
@@ -702,7 +767,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		let appendSources = this.appendSystemPromptSource;
 		if (!appendSources) {
-			const discoveredAppendSystemPromptFile = this.discoverAppendSystemPromptFile();
+			const discoveredAppendSystemPromptFile = this.discoverAppendSystemPromptFile(projectTrusted);
 			appendSources = discoveredAppendSystemPromptFile ? [discoveredAppendSystemPromptFile] : [];
 		}
 		const baseAppend = appendSources
@@ -714,7 +779,6 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.appendSystemPromptSourcePaths = appendSources
 			.filter((source) => existsSync(source))
 			.map((source) => resolvePath(source));
-		this.loaded = true;
 	}
 
 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {
@@ -1250,9 +1314,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return { themes: Array.from(seen.values()), diagnostics };
 	}
 
-	private discoverSystemPromptFile(): string | undefined {
+	private discoverSystemPromptFile(projectTrusted = this.settingsManager.isProjectTrusted()): string | undefined {
 		const projectPath = join(this.cwd, CONFIG_DIR_NAME, "SYSTEM.md");
-		if (this.settingsManager.isProjectTrusted() && existsSync(projectPath)) {
+		if (projectTrusted && existsSync(projectPath)) {
 			return projectPath;
 		}
 
@@ -1264,9 +1328,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return undefined;
 	}
 
-	private discoverAppendSystemPromptFile(): string | undefined {
+	private discoverAppendSystemPromptFile(
+		projectTrusted = this.settingsManager.isProjectTrusted(),
+	): string | undefined {
 		const projectPath = join(this.cwd, CONFIG_DIR_NAME, "APPEND_SYSTEM.md");
-		if (this.settingsManager.isProjectTrusted() && existsSync(projectPath)) {
+		if (projectTrusted && existsSync(projectPath)) {
 			return projectPath;
 		}
 

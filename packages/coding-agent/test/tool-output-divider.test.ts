@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Text, type TUI } from "@earendil-works/pi-tui";
+import { type Component, Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../src/core/agent-session.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
@@ -77,6 +77,8 @@ function createHarness(renderers: Record<string, (entry: unknown) => Text | unde
 		getMarkdownThemeWithSettings: proto.getMarkdownThemeWithSettings,
 		getMarkdownTransformers: () => [],
 		addCustomEntryToChat: proto.addCustomEntryToChat,
+		createCustomEntryComponent: proto.createCustomEntryComponent,
+		splitAssistantAroundEntries: proto.splitAssistantAroundEntries,
 		addMessageToChat: proto.addMessageToChat,
 		getUserMessageText: proto.getUserMessageText,
 		renderSessionItems: proto.renderSessionItems,
@@ -101,6 +103,136 @@ function createHarness(renderers: Record<string, (entry: unknown) => Text | unde
 		(proto.renderSessionEntries as (entries: SessionEntry[]) => void).call(fakeThis, entries);
 
 	return { fakeThis, chatContainer, handleEvent, renderSessionEntries };
+}
+
+function makeAssistantBlocks(texts: string[]): AssistantMessage {
+	return { ...makeAssistantMessage(""), content: texts.map((text) => ({ type: "text" as const, text })) };
+}
+
+function customEntry(id: string, parentId: string | null, streamContentIndex?: number): SessionEntry {
+	return {
+		type: "custom",
+		id,
+		parentId,
+		timestamp: new Date().toISOString(),
+		customType: "antigravity-acp-tool-activity",
+		data: { label: id },
+		...(streamContentIndex !== undefined ? { streamContentIndex } : {}),
+	} as SessionEntry;
+}
+
+function plainText(container: Container): string {
+	return container
+		.render(100)
+		.map((line) => stripAnsi(line).trimEnd())
+		.join("\n");
+}
+
+describe("custom entries appended while an assistant message streamed", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	const renderers = {
+		"antigravity-acp-tool-activity": (entry: unknown) =>
+			new Text(`ROW ${(entry as { data: { label: string } }).data.label}`, 0, 0),
+	};
+
+	it("replays each entry between the blocks it streamed between, with the divider before the final answer", () => {
+		const { chatContainer, renderSessionEntries } = createHarness(renderers);
+		renderSessionEntries([
+			customEntry("c1", null, 1),
+			customEntry("c2", "c1", 2),
+			{
+				type: "message",
+				id: "m1",
+				parentId: "c2",
+				timestamp: new Date().toISOString(),
+				message: makeAssistantBlocks(["First narration.", "Second narration.", "Final answer."]),
+			},
+		]);
+		const text = plainText(chatContainer);
+		const order = ["First narration.", "ROW c1", "Second narration.", "ROW c2", "Final answer."].map((part) =>
+			text.indexOf(part),
+		);
+		expect(order.every((position) => position >= 0)).toBe(true);
+		expect([...order].sort((a, b) => a - b)).toEqual(order);
+		// Every block is shown exactly once.
+		expect(text.split("Second narration.")).toHaveLength(2);
+		const children = chatContainer.children;
+		const divider = children.findIndex((c) => c instanceof DynamicBorder);
+		expect(divider).toBeGreaterThan(children.findIndex((c) => plainText(wrap(c)).includes("ROW c2")));
+	});
+
+	it("keeps entries without a stream position (older sessions) before the message", () => {
+		const { chatContainer, renderSessionEntries } = createHarness(renderers);
+		renderSessionEntries([
+			customEntry("c1", null),
+			{
+				type: "message",
+				id: "m1",
+				parentId: "c1",
+				timestamp: new Date().toISOString(),
+				message: makeAssistantBlocks(["First narration.", "Final answer."]),
+			},
+		]);
+		const text = plainText(chatContainer);
+		expect(text.indexOf("ROW c1")).toBeLessThan(text.indexOf("First narration."));
+	});
+
+	it("shows entries after a message that never arrived, in their original order", () => {
+		const { chatContainer, renderSessionEntries } = createHarness(renderers);
+		renderSessionEntries([customEntry("c1", null, 1), customEntry("c2", "c1", 2)]);
+		const text = plainText(chatContainer);
+		expect(text.indexOf("ROW c1")).toBeGreaterThanOrEqual(0);
+		expect(text.indexOf("ROW c1")).toBeLessThan(text.indexOf("ROW c2"));
+	});
+
+	it("replays the same transcript the live stream showed", async () => {
+		const live = createHarness(renderers);
+		const firstBlock = makeAssistantBlocks(["First narration."]);
+		const twoBlocks = makeAssistantBlocks(["First narration.", "Second narration."]);
+		const final = makeAssistantBlocks(["First narration.", "Second narration.", "Final answer."]);
+		const update = (message: AssistantMessage) =>
+			live.handleEvent({
+				type: "message_update",
+				message,
+				assistantMessageEvent: {
+					type: "text_delta",
+					contentIndex: message.content.length - 1,
+					delta: "x",
+					partial: message,
+				},
+			} as unknown as AgentSessionEvent);
+		await live.handleEvent({ type: "agent_start" });
+		await live.handleEvent({ type: "message_start", message: firstBlock });
+		await update(firstBlock);
+		await live.handleEvent({
+			type: "entry_appended",
+			entry: customEntry("c1", null, 1),
+		} as unknown as AgentSessionEvent);
+		await update(twoBlocks);
+		await live.handleEvent({
+			type: "entry_appended",
+			entry: customEntry("c2", "c1", 2),
+		} as unknown as AgentSessionEvent);
+		await update(final);
+		await live.handleEvent({ type: "message_end", message: final });
+
+		const replay = createHarness(renderers);
+		replay.renderSessionEntries([
+			customEntry("c1", null, 1),
+			customEntry("c2", "c1", 2),
+			{ type: "message", id: "m1", parentId: "c2", timestamp: new Date().toISOString(), message: final },
+		]);
+		expect(plainText(replay.chatContainer)).toBe(plainText(live.chatContainer));
+	});
+});
+
+function wrap(component: Component): Container {
+	const container = new Container();
+	container.addChild(component);
+	return container;
 }
 
 describe("tool output divider", () => {

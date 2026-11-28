@@ -419,6 +419,11 @@ export class ExtensionRunner {
 		this.modelRegistry = modelRegistry;
 	}
 
+	/** Update the active working directory seen by `ctx.cwd` and subsequent tool calls. */
+	setCwd(cwd: string): void {
+		this.cwd = cwd;
+	}
+
 	bindCore(
 		actions: ExtensionActions,
 		contextActions: ExtensionContextActions,
@@ -446,6 +451,7 @@ export class ExtensionRunner {
 		this.runtime.setModel = actions.setModel;
 		this.runtime.getThinkingLevel = actions.getThinkingLevel;
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
+		this.runtime.setCwd = actions.setCwd;
 		this.runtime.createContext = () => this.createContext();
 
 		// Context actions (required)

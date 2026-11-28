@@ -77,6 +77,11 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	modelId: string;
 }
 
+export interface CwdChangeEntry extends SessionEntryBase {
+	type: "cwd_change";
+	cwd: string;
+}
+
 export interface UsageEntry extends SessionEntryBase {
 	type: "usage";
 	/** Arbitrary usage category, such as "cache_warm". */
@@ -129,6 +134,12 @@ export interface CustomEntry<T = unknown> extends SessionEntryBase {
 	type: "custom";
 	customType: string;
 	data?: T;
+	/**
+	 * Content blocks the streaming assistant message had when this entry was appended, if one was streaming.
+	 * The message is saved after the entry, so replay uses this to show the entry between the blocks it
+	 * arrived between (e.g. tool activity rows a provider runs remotely, between narration paragraphs).
+	 */
+	streamContentIndex?: number;
 }
 
 /** Label entry for user-defined bookmarks/markers on entries. */
@@ -184,6 +195,7 @@ export type SessionEntry =
 	| SessionMessageEntry
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
+	| CwdChangeEntry
 	| UsageEntry
 	| CompactionEntry
 	| BranchSummaryEntry
@@ -1001,6 +1013,7 @@ export class SessionManager {
 	private sessionFile: string | undefined;
 	private sessionDir: string;
 	private cwd: string;
+	private cwdOverride: string | undefined;
 	private persist: boolean;
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
@@ -1016,8 +1029,10 @@ export class SessionManager {
 		persist: boolean,
 		newSessionOptions?: NewSessionOptions,
 		preloadedFileEntries?: FileEntry[],
+		cwdOverride?: string,
 	) {
 		this.cwd = resolvePath(cwd);
+		this.cwdOverride = cwdOverride !== undefined ? resolvePath(cwdOverride) : undefined;
 		this.sessionDir = normalizePath(sessionDir);
 		this.persist = persist;
 		if (persist && this.sessionDir && !existsSync(this.sessionDir)) {
@@ -1150,6 +1165,16 @@ export class SessionManager {
 	}
 
 	getCwd(): string {
+		if (this.cwdOverride !== undefined) {
+			return this.cwdOverride;
+		}
+		let current = this.leafId ? this.byId.get(this.leafId) : undefined;
+		while (current) {
+			if (current.type === "cwd_change") {
+				return current.cwd;
+			}
+			current = current.parentId ? this.byId.get(current.parentId) : undefined;
+		}
 		return this.cwd;
 	}
 
@@ -1262,6 +1287,21 @@ export class SessionManager {
 		return entry.id;
 	}
 
+	/** Append a working directory change as child of current leaf, then advance leaf. Returns entry id. */
+	appendCwdChange(cwd: string): string {
+		const resolved = resolvePath(cwd);
+		this.cwdOverride = undefined;
+		const entry: CwdChangeEntry = {
+			type: "cwd_change",
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			cwd: resolved,
+		};
+		this._appendEntry(entry);
+		return entry.id;
+	}
+
 	/** Append model-attributed usage that does not participate in LLM context. Returns the appended entry. */
 	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): UsageEntry {
 		const entry: UsageEntry = {
@@ -1309,11 +1349,12 @@ export class SessionManager {
 	}
 
 	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
-	appendCustomEntry(customType: string, data?: unknown): string {
+	appendCustomEntry(customType: string, data?: unknown, streamContentIndex?: number): string {
 		const entry: CustomEntry = {
 			type: "custom",
 			customType,
 			data,
+			...(streamContentIndex !== undefined ? { streamContentIndex } : {}),
 			id: generateId(this.byId),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
@@ -1804,7 +1845,7 @@ export class SessionManager {
 		const cwd = cwdOverride ?? (header ? getSessionHeaderCwd(header) : undefined) ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ? normalizePath(sessionDir) : resolve(resolvedPath, "..");
-		return new SessionManager(cwd, dir, resolvedPath, true, undefined, preloadedFileEntries);
+		return new SessionManager(cwd, dir, resolvedPath, true, undefined, preloadedFileEntries, cwdOverride);
 	}
 
 	/**
@@ -1889,7 +1930,11 @@ export class SessionManager {
 			closeSync(fd);
 		}
 
-		return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
+		const forked = new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
+		if (!pathsEqual(forked.getCwd(), resolvedTargetCwd)) {
+			forked.appendCwdChange(resolvedTargetCwd);
+		}
+		return forked;
 	}
 
 	/**

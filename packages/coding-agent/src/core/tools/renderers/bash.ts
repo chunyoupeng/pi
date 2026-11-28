@@ -103,9 +103,17 @@ function rebuildBashResultRenderComponent(
 	}
 }
 
+/** `renderCall` functions made by {@link createShellRenderers}, so the TUI can tell built-in shell rendering from an override. */
+const builtInShellRenderCalls = new WeakSet<object>();
+
+/** Whether a tool's renderers are the built-in bash/powershell ones (not replaced by an extension). */
+export function isBuiltInShellRenderers(renderers: { renderCall?: object } | undefined): boolean {
+	return renderers?.renderCall !== undefined && builtInShellRenderCalls.has(renderers.renderCall);
+}
+
 /** Shell renderers are shared by bash and powershell, which differ only in the prompt they display. */
 export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> {
-	return {
+	const renderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
 		renderCall(args, _theme, context) {
 			startToolTimer(context);
 			const component =
@@ -138,6 +146,8 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 			return component;
 		},
 	};
+	builtInShellRenderCalls.add(renderers.renderCall!);
+	return renderers;
 }
 
 class BashCallHeaderComponent {

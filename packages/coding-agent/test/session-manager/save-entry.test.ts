@@ -52,4 +52,14 @@ describe("SessionManager.saveCustomEntry", () => {
 		const ctx = session.buildSessionContext();
 		expect(ctx.messages).toHaveLength(2); // only message entries
 	});
+
+	it("stores the stream position only when an assistant message was streaming", () => {
+		const session = SessionManager.inMemory();
+		const plainId = session.appendCustomEntry("my_data", { foo: "bar" });
+		const streamedId = session.appendCustomEntry("my_data", { foo: "baz" }, 2);
+		const firstId = session.appendCustomEntry("my_data", undefined, 0);
+		expect(session.getEntry(plainId)).not.toHaveProperty("streamContentIndex");
+		expect((session.getEntry(streamedId) as CustomEntry).streamContentIndex).toBe(2);
+		expect((session.getEntry(firstId) as CustomEntry).streamContentIndex).toBe(0);
+	});
 });

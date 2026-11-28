@@ -9,6 +9,7 @@ import mcpExtension from "./mcp/index.ts";
 import memoryExtension from "./memory/index.ts";
 import swarmExtension from "./swarm/index.ts";
 import toolSearchExtension from "./tool-search/index.ts";
+import workspaceExtension from "./workspace/index.ts";
 
 export const builtInExtensions: InlineExtension[] = [
 	{ name: "auto-session-name", factory: autoSessionNameExtension, builtin: true },
@@ -17,6 +18,7 @@ export const builtInExtensions: InlineExtension[] = [
 	{ name: "memory", factory: memoryExtension, replaceable: true, builtin: true },
 	{ name: "bg-task", factory: bgTaskExtension, replaceable: true, builtin: true },
 	{ name: "swarm", factory: swarmExtension, replaceable: true, builtin: true },
+	{ name: "workspace", factory: workspaceExtension, replaceable: true, builtin: true },
 	{ name: "llama.cpp", factory: llamaExtension, builtin: true },
 	{ name: "codemode", factory: codemodeExtension, replaceable: true, builtin: true },
 	{ name: "tool-search", factory: toolSearchExtension, replaceable: true, builtin: true },

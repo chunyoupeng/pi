@@ -171,6 +171,8 @@ Extension state persistence. Does NOT participate in LLM context.
 
 Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
 
+An entry appended while an assistant message was streaming also has `streamContentIndex`: the number of content blocks that message had at that moment. The message is saved after the entry, so on reload interactive mode uses this to show the entry between the blocks it arrived between, as it appeared live. Entries without it, or with `0`, render before the message.
+
 Pi stores [virtual model](virtual-models.md) router state as custom entries with `customType` `pi.virtual-model-state` and `data` `{ provider, modelId, state }`.
 
 ### CustomMessageEntry

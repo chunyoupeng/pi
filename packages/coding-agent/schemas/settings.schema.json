@@ -251,6 +251,35 @@
       "description": "Global setting only.",
       "default": "ask"
     },
+    "workspaceSwitchPolicy": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "off"
+        },
+        {
+          "type": "string",
+          "const": "workspace"
+        },
+        {
+          "type": "string",
+          "const": "ask"
+        },
+        {
+          "type": "string",
+          "const": "allow"
+        }
+      ],
+      "description": "Controls agent-initiated workspace switching via switch_workspace: \"workspace\" allows switching within the launch directory or allowedWorkspaces without prompting and asks outside; \"ask\" always confirms; \"allow\" switches without prompting; \"off\" disables agent switching (manual /cd still works).",
+      "default": "workspace"
+    },
+    "allowedWorkspaces": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Additional root directories the agent may switch into without confirmation when workspaceSwitchPolicy is \"workspace\". Supports leading ~ expansion."
+    },
     "shellCommandPrefix": {
       "type": "string",
       "description": "Prefix prepended to every bash command, for example to enable shell aliases."
