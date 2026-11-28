@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The working status shows how long the last thinking run took ("thought for 3s") for 2 seconds after it ends; a tool call, tool execution, or remote tool row clears it at once
+
 ### Changed
 
 - The end-of-turn status shows total elapsed time and generation speed without a separate time-to-first-token value

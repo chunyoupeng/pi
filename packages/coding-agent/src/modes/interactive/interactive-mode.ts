@@ -260,33 +260,51 @@ function isEmbeddedStatus(editor: EditorComponent): editor is WorkingStatusEdito
 	);
 }
 
-function nextAssistantThinkingState(current: boolean, event: AssistantMessageEvent | undefined): boolean {
-	switch (event?.type) {
+/** How an assistant stream event moves the thinking status: a run starts, ends, gives way to a tool call, or nothing changes. */
+function thinkingTransition(event: AssistantMessageEvent): "start" | "end" | "tool" | "none" {
+	switch (event.type) {
 		case "thinking_delta":
-			return event.delta.length > 0 ? true : current;
+			return event.delta.length > 0 ? "start" : "none";
+		case "text_delta":
+			// Empty deltas are usage syncs (e.g. from the ACP provider), not output.
+			return event.delta.length > 0 ? "end" : "none";
 		case "thinking_end":
 		case "text_start":
 		case "text_end":
+		case "done":
+		case "error":
+			return "end";
 		case "toolcall_start":
 		case "toolcall_delta":
 		case "toolcall_end":
-		case "done":
-		case "error":
-			return false;
-		case "text_delta":
-			return event.delta.length > 0 ? false : current;
+			return "tool";
 		default:
-			return current;
+			return "none";
 	}
 }
 
+/**
+ * How long "thought for Xs" stays after a thinking run ends. Providers such as ACP end a run only when the
+ * first text arrives, so without a hold the detail would never be visible.
+ */
+const THOUGHT_HOLD_MS = 2000;
+
+/** Status detail: the effort while the model thinks, then how long its last thinking run took ("thought for 2s"). */
 function resolveWorkingDetail(
 	workingMessage: string | undefined,
 	isAssistantThinking: boolean,
 	thinkingLevel: ThinkingLevel | undefined,
+	lastThoughtMs: number | undefined,
 ): string | undefined {
-	if (workingMessage !== undefined || !isAssistantThinking) return undefined;
-	return thinkingLevel && thinkingLevel !== "off" ? `still thinking with ${thinkingLevel} effort` : "still thinking";
+	if (workingMessage !== undefined) return undefined;
+	if (isAssistantThinking) {
+		return thinkingLevel && thinkingLevel !== "off"
+			? `still thinking with ${thinkingLevel} effort`
+			: "still thinking";
+	}
+	if (lastThoughtMs === undefined) return undefined;
+	const seconds = Math.max(1, Math.round(lastThoughtMs / 1000));
+	return `thought for ${seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`}`;
 }
 
 function estimateLiveContextTokens(message: AssistantMessage): number | undefined {
@@ -726,6 +744,13 @@ export class InteractiveMode {
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private defaultWorkingMessage = pickWorkingMessage();
 	private isAssistantThinking = false;
+	/** Start of the thinking run in progress, for the "thought for 2s" status detail. */
+	private thinkingStartedAt: number | undefined;
+	/** Duration of the last finished thinking run, shown until `thoughtHoldTimer` fires or a tool starts. */
+	private lastThoughtMs: number | undefined;
+	private thoughtHoldTimer: ReturnType<typeof setTimeout> | undefined;
+	/** First content block of the streaming message streamed after the latest remote tool row. */
+	private thinkingContentStart = 0;
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
@@ -2756,7 +2781,68 @@ export class InteractiveMode {
 			this.workingMessage,
 			this.isAssistantThinking,
 			this.session?.routedModel?.thinkingLevel ?? this.session?.thinkingLevel,
+			this.lastThoughtMs,
 		);
+	}
+
+	/** Track thinking runs for the status detail; "thought for Xs" lasts briefly, or until the next tool call. */
+	private applyThinkingTransition(event: AssistantMessageEvent): void {
+		// Providers that run tools remotely (ACP) append the tool row synchronously while earlier stream events
+		// are still queued. Events for blocks above that row are stale: they must not restart or time a run.
+		if (
+			event.type !== "start" &&
+			event.type !== "done" &&
+			event.type !== "error" &&
+			event.contentIndex < this.thinkingContentStart
+		) {
+			return;
+		}
+		switch (thinkingTransition(event)) {
+			case "start":
+				if (this.isAssistantThinking) return;
+				this.resetThinkingStatus();
+				this.isAssistantThinking = true;
+				this.thinkingStartedAt = Date.now();
+				break;
+			case "end":
+				if (!this.endThinkingRun()) return;
+				break;
+			case "tool":
+				if (!this.isAssistantThinking && this.lastThoughtMs === undefined) return;
+				this.resetThinkingStatus();
+				break;
+			case "none":
+				return;
+		}
+		if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+			this.activeStatusIndicator.setDetail(this.getWorkingDetail());
+		}
+	}
+
+	/** End the thinking run in progress and hold its "thought for Xs" briefly; false when no run was active. */
+	private endThinkingRun(): boolean {
+		if (!this.isAssistantThinking) return false;
+		this.isAssistantThinking = false;
+		if (this.thinkingStartedAt !== undefined) this.lastThoughtMs = Date.now() - this.thinkingStartedAt;
+		this.thinkingStartedAt = undefined;
+		clearTimeout(this.thoughtHoldTimer);
+		this.thoughtHoldTimer = setTimeout(() => {
+			this.thoughtHoldTimer = undefined;
+			this.lastThoughtMs = undefined;
+			if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+				this.activeStatusIndicator.setDetail(this.getWorkingDetail());
+			}
+		}, THOUGHT_HOLD_MS);
+		return true;
+	}
+
+	/** Drop the thinking run in progress and any held "thought for Xs". */
+	private resetThinkingStatus(): void {
+		this.isAssistantThinking = false;
+		this.thinkingStartedAt = undefined;
+		this.lastThoughtMs = undefined;
+		clearTimeout(this.thoughtHoldTimer);
+		this.thoughtHoldTimer = undefined;
 	}
 
 	private showWorkingStatusIndicator(): void {
@@ -2798,11 +2884,7 @@ export class InteractiveMode {
 	private updateWorkingOutputTokenLabel(tokens: number): void {
 		if (this.agentStartedAt === undefined) return;
 		const message = this.workingMessage ?? this.defaultWorkingMessage;
-		const detail = resolveWorkingDetail(
-			this.workingMessage,
-			this.isAssistantThinking,
-			this.session?.routedModel?.thinkingLevel ?? this.session?.thinkingLevel,
-		);
+		const detail = this.getWorkingDetail();
 		const [shownTokens, direction] =
 			this.requestInputTokens === undefined ? [tokens, "down" as const] : [this.requestInputTokens, "up" as const];
 		if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
@@ -3890,7 +3972,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.defaultWorkingMessage = pickWorkingMessage();
-				this.isAssistantThinking = false;
+				this.resetThinkingStatus();
 				this.agentStartedAt = Date.now();
 				this.assistantFirstTokenAt = undefined;
 				this.completedAgentGenerationMs = 0;
@@ -3907,7 +3989,7 @@ export class InteractiveMode {
 				break;
 
 			case "turn_start":
-				this.isAssistantThinking = false;
+				this.resetThinkingStatus();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3935,6 +4017,16 @@ export class InteractiveMode {
 				if (event.entry.type === "custom") {
 					if (this.addCustomEntryToChat(event.entry)) {
 						this.addToolOutputDividerBeforeNextAssistant = true;
+					}
+					// Rendered custom entries (e.g. ACP remote tool activity, including grouped/in-place updates)
+					// mark tool execution; clear thinking state so "thought for Xs" disappears, and fence off the
+					// blocks streamed so far so their queued thinking events cannot reinstate it.
+					if (this.session.extensionRunner.getEntryRenderer(event.entry.customType)) {
+						this.resetThinkingStatus();
+						this.thinkingContentStart = this.streamingMessage?.content.length ?? 0;
+						if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+							this.activeStatusIndicator.setDetail(undefined);
+						}
 					}
 					this.ui.requestRender();
 				} else if (event.entry.type === "usage" && event.entry.kind === "cache_warm") {
@@ -4006,7 +4098,7 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
-					this.isAssistantThinking = false;
+					this.resetThinkingStatus();
 					if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
 						this.activeStatusIndicator.setMessage(this.workingMessage ?? this.defaultWorkingMessage);
 						this.activeStatusIndicator.setDetail(undefined);
@@ -4023,6 +4115,7 @@ export class InteractiveMode {
 					this.streamingComponent.setExpanded(this.toolOutputExpanded);
 					this.streamingComponent.setStreaming(true);
 					this.streamingContentStart = 0;
+					this.thinkingContentStart = 0;
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
@@ -4043,19 +4136,7 @@ export class InteractiveMode {
 					this.requestInputTokens = undefined;
 				}
 				if (event.message.role === "assistant") {
-					const nextThinking = nextAssistantThinkingState(this.isAssistantThinking, event.assistantMessageEvent);
-					if (nextThinking !== this.isAssistantThinking) {
-						this.isAssistantThinking = nextThinking;
-						if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
-							this.activeStatusIndicator.setDetail(
-								resolveWorkingDetail(
-									this.workingMessage,
-									this.isAssistantThinking,
-									this.session?.routedModel?.thinkingLevel ?? this.session?.thinkingLevel,
-								),
-							);
-						}
-					}
+					this.applyThinkingTransition(event.assistantMessageEvent);
 				}
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
@@ -4097,7 +4178,7 @@ export class InteractiveMode {
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (event.message.role === "assistant") {
-					this.isAssistantThinking = false;
+					this.endThinkingRun();
 					if (this.assistantFirstTokenAt !== undefined) {
 						this.completedAgentGenerationMs += Math.max(0, Date.now() - this.assistantFirstTokenAt);
 						this.assistantFirstTokenAt = undefined;
@@ -4174,11 +4255,9 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
-				if (this.isAssistantThinking) {
-					this.isAssistantThinking = false;
-					if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
-						this.activeStatusIndicator.setDetail(undefined);
-					}
+				this.resetThinkingStatus();
+				if (this.activeStatusIndicator instanceof WorkingStatusIndicator) {
+					this.activeStatusIndicator.setDetail(undefined);
 				}
 				// Nested calls (from codemode scripts) are shown inside their parent's row.
 				if (event.parentToolCallId) break;
@@ -4228,7 +4307,7 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
-				this.isAssistantThinking = false;
+				this.resetThinkingStatus();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}

@@ -1025,6 +1025,10 @@ describe("InteractiveMode end-of-turn timing status", () => {
 			completedAgentOutputTokens: 0,
 			streamingComponent: undefined,
 			streamingMessage: undefined,
+			thinkingContentStart: 0,
+			applyThinkingTransition: (InteractiveMode as any).prototype.applyThinkingTransition,
+			endThinkingRun: (InteractiveMode as any).prototype.endThinkingRun,
+			resetThinkingStatus: (InteractiveMode as any).prototype.resetThinkingStatus,
 			isFirstOutputTokenEvent: (InteractiveMode as any).prototype.isFirstOutputTokenEvent,
 		};
 		const handleEvent = (event: unknown) => (InteractiveMode as any).prototype.handleEvent.call(fakeThis, event);
@@ -1178,7 +1182,11 @@ describe("InteractiveMode thinking status and live footer context", () => {
 		};
 	}
 
-	function createStreamingHarness(thinkingLevel: "off" | "low" | "medium" | "high" | "xhigh", reasoning = true) {
+	function createStreamingHarness(
+		thinkingLevel: "off" | "low" | "medium" | "high" | "xhigh",
+		reasoning = true,
+		entryRenderers: Record<string, (entry: unknown) => Component | undefined> = {},
+	) {
 		const tui = { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } } as unknown as TUI;
 		const indicator = new WorkingStatusIndicator(tui, "Pondering");
 		const footer = {
@@ -1188,11 +1196,22 @@ describe("InteractiveMode thinking status and live footer context", () => {
 		};
 		const fakeThis: Record<string, unknown> = {
 			isInitialized: true,
-			session: { thinkingLevel, isStreaming: true, routedModel: undefined, model: { reasoning }, messages: [] },
+			session: {
+				thinkingLevel,
+				isStreaming: true,
+				routedModel: undefined,
+				model: { reasoning },
+				messages: [],
+				extensionRunner: {
+					getEntryRenderer: (type: string) => entryRenderers[type],
+				},
+			},
+			sessionManager: { getCwd: () => "/repo" },
 			footer,
 			programStatus: { handleEvent: vi.fn() },
 			pendingTools: new Map(),
 			turnTools: new Set(),
+			entriesRenderedByBoundaryCompaction: new Set(),
 			addToolOutputDividerBeforeNextAssistant: false,
 			defaultEditor: { onEscape: undefined },
 			retryEscapeHandler: undefined,
@@ -1201,6 +1220,8 @@ describe("InteractiveMode thinking status and live footer context", () => {
 			settingsManager: {
 				getShowTerminalProgress: () => false,
 				getCollapseToolOutput: () => false,
+				getShowImages: () => false,
+				getImageWidthCells: () => 0,
 			},
 			toolOutputExpanded: false,
 			hideThinkingBlock: false,
@@ -1211,9 +1232,15 @@ describe("InteractiveMode thinking status and live footer context", () => {
 			workingVisible: true,
 			defaultWorkingMessage: "Pondering",
 			isAssistantThinking: false,
+			getRegisteredToolDefinition: () => undefined,
 			getMarkdownThemeWithSettings: () => ({}),
 			getMarkdownTransformers: () => [],
 			getWorkingDetail: (InteractiveMode as any).prototype.getWorkingDetail,
+			applyThinkingTransition: (InteractiveMode as any).prototype.applyThinkingTransition,
+			endThinkingRun: (InteractiveMode as any).prototype.endThinkingRun,
+			resetThinkingStatus: (InteractiveMode as any).prototype.resetThinkingStatus,
+			addCustomEntryToChat: (InteractiveMode as any).prototype.addCustomEntryToChat,
+			createCustomEntryComponent: (InteractiveMode as any).prototype.createCustomEntryComponent,
 			updateLiveOutputTokens: (InteractiveMode as any).prototype.updateLiveOutputTokens,
 			updateWorkingOutputTokenLabel: (InteractiveMode as any).prototype.updateWorkingOutputTokenLabel,
 			startRequestInputPhase: (InteractiveMode as any).prototype.startRequestInputPhase,
@@ -1230,6 +1257,8 @@ describe("InteractiveMode thinking status and live footer context", () => {
 			completedAgentOutputTokens: 0,
 			streamingComponent: undefined,
 			streamingMessage: undefined,
+			streamingContentStart: 0,
+			thinkingContentStart: 0,
 			isFirstOutputTokenEvent: (InteractiveMode as any).prototype.isFirstOutputTokenEvent,
 		};
 		const handleEvent = (event: unknown) => (InteractiveMode as any).prototype.handleEvent.call(fakeThis, event);
@@ -1330,6 +1359,8 @@ describe("InteractiveMode thinking status and live footer context", () => {
 				});
 				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
 				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+				// Starting to speak ends the run; its duration replaces the effort detail for a short hold.
+				expect(stripAnsi(indicator.render(120).join("\n"))).toMatch(/Pondering \([^)]+ · thought for \d+s\)/);
 
 				// Explicit thinking delta later in the turn re-activates the thinking suffix.
 				const thinkingMsg = makeAssistantMessage([{ type: "thinking", thinking: "more" }], {
@@ -1364,8 +1395,9 @@ describe("InteractiveMode thinking status and live footer context", () => {
 						partial: thinkingMsg,
 					},
 				});
-				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
 				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+				// thinking_end also ends the run and holds its duration.
+				expect(stripAnsi(indicator.render(120).join("\n"))).toMatch(/Pondering \([^)]+ · thought for \d+s\)/);
 
 				await handleEvent({
 					type: "message_update",
@@ -1392,11 +1424,13 @@ describe("InteractiveMode thinking status and live footer context", () => {
 				});
 				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering (");
 				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("thought for");
 
-				// Starting a subsequent turn waits for the next first token without the thinking suffix.
+				// Starting a subsequent turn waits for the next first token without any thinking or "thought for" suffix.
 				await handleEvent({ type: "turn_start" });
 				expect(stripAnsi(indicator.render(120).join("\n"))).toContain("Pondering");
 				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("still thinking");
+				expect(stripAnsi(indicator.render(120).join("\n"))).not.toContain("thought for");
 			} finally {
 				indicator.dispose();
 			}
@@ -1539,6 +1573,157 @@ describe("InteractiveMode thinking status and live footer context", () => {
 				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: streaming },
 			});
 			expect(label()).toContain("↓ 100 tokens");
+		} finally {
+			indicator.dispose();
+		}
+	});
+
+	test("holds 'thought for Xs' briefly after a run and clears it on tool calls and tool execution", async () => {
+		initTheme("dark");
+		vi.useFakeTimers();
+		const { fakeThis, indicator, handleEvent } = createStreamingHarness("high", true);
+		const empty = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+		const label = () => stripAnsi(indicator.render(120).join("\n"));
+		const update = (
+			message: ReturnType<typeof makeAssistantMessage>,
+			assistantMessageEvent: Record<string, unknown>,
+		) =>
+			handleEvent({
+				type: "message_update",
+				message,
+				assistantMessageEvent: { ...assistantMessageEvent, partial: message },
+			});
+		try {
+			await handleEvent({ type: "agent_start" });
+			fakeThis.defaultWorkingMessage = "Pondering";
+			await handleEvent({ type: "turn_start" });
+			await handleEvent({ type: "message_start", message: makeAssistantMessage([], empty) });
+
+			const thinkingMsg = makeAssistantMessage([{ type: "thinking", thinking: "plan" }], empty);
+			await update(thinkingMsg, { type: "thinking_delta", contentIndex: 0, delta: "plan" });
+			expect(label()).toContain("still thinking with high effort");
+			await update(thinkingMsg, { type: "thinking_end", contentIndex: 0, content: "plan" });
+			expect(label()).toMatch(/thought for \d+s/);
+
+			// Empty usage-sync deltas (ACP) are neither thinking nor speaking; speaking keeps it until the hold ends.
+			await update(thinkingMsg, { type: "thinking_delta", contentIndex: 0, delta: "" });
+			expect(label()).toMatch(/thought for \d+s/);
+			await update(thinkingMsg, { type: "text_start", contentIndex: 1 });
+			await update(thinkingMsg, { type: "text_delta", contentIndex: 1, delta: "Answer" });
+			expect(label()).toMatch(/thought for \d+s/);
+			vi.advanceTimersByTime(1999);
+			expect(label()).toMatch(/thought for \d+s/);
+			vi.advanceTimersByTime(1);
+			expect(label()).not.toContain("thought for");
+
+			// ACP ends a run only when the first text arrives: the hold is what makes the duration visible.
+			await update(thinkingMsg, { type: "thinking_delta", contentIndex: 2, delta: "again" });
+			vi.advanceTimersByTime(3000);
+			await update(thinkingMsg, { type: "text_delta", contentIndex: 3, delta: "More" });
+			expect(label()).toMatch(/thought for 3s/);
+			vi.advanceTimersByTime(2000);
+			expect(label()).not.toContain("thought for");
+
+			// A tool call clears it at once.
+			await update(thinkingMsg, { type: "thinking_delta", contentIndex: 4, delta: "more" });
+			await update(thinkingMsg, { type: "thinking_end", contentIndex: 4, content: "more" });
+			expect(label()).toMatch(/thought for \d+s/);
+			await update(thinkingMsg, { type: "toolcall_start", contentIndex: 5 });
+			expect(label()).not.toContain("thought for");
+
+			// So does tool execution after a thinking-only message, and the next turn starts without it.
+			await update(thinkingMsg, { type: "thinking_delta", contentIndex: 6, delta: "last" });
+			await handleEvent({ type: "message_end", message: thinkingMsg });
+			expect(label()).toMatch(/thought for \d+s/);
+			await handleEvent({
+				type: "tool_execution_start",
+				toolCallId: "call-1",
+				toolName: "read",
+				args: { path: "foo.ts" },
+			});
+			expect(label()).not.toContain("thought for");
+			expect(label()).not.toContain("still thinking");
+			await handleEvent({ type: "turn_start" });
+			await handleEvent({ type: "message_start", message: makeAssistantMessage([], empty) });
+			expect(label()).not.toContain("thought for");
+		} finally {
+			vi.useRealTimers();
+			indicator.dispose();
+		}
+	});
+
+	test("rendered custom entries (ACP tools) clear the thinking detail, and queued events for earlier blocks cannot restore it", async () => {
+		initTheme("dark");
+		let renderNextAcpEntry = true;
+		const rowComponent: Component = { render: () => ["acp tool"], invalidate: () => {} };
+		const { fakeThis, indicator, handleEvent } = createStreamingHarness("high", true, {
+			"antigravity-acp-tool-activity": () => (renderNextAcpEntry ? rowComponent : undefined),
+		});
+		const empty = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+		const label = () => stripAnsi(indicator.render(120).join("\n"));
+		const update = (
+			message: ReturnType<typeof makeAssistantMessage>,
+			assistantMessageEvent: Record<string, unknown>,
+		) =>
+			handleEvent({
+				type: "message_update",
+				message,
+				assistantMessageEvent: { ...assistantMessageEvent, partial: message },
+			});
+		const toolEntry = (id: string) =>
+			handleEvent({
+				type: "entry_appended",
+				entry: {
+					type: "custom",
+					id,
+					parentId: null,
+					timestamp: "",
+					customType: "antigravity-acp-tool-activity",
+					data: {},
+				},
+			});
+		try {
+			await handleEvent({ type: "agent_start" });
+			fakeThis.defaultWorkingMessage = "Pondering";
+			await handleEvent({ type: "turn_start" });
+			await handleEvent({ type: "message_start", message: makeAssistantMessage([], empty) });
+
+			const firstMsg = makeAssistantMessage([{ type: "thinking", thinking: "plan" }], empty);
+			await update(firstMsg, { type: "thinking_delta", contentIndex: 0, delta: "plan" });
+			await update(firstMsg, { type: "thinking_end", contentIndex: 0, content: "plan" });
+			expect(label()).toMatch(/thought for \d+s/);
+
+			// Non-rendered state entries do not clear it; a rendered ACP tool row does.
+			await handleEvent({
+				type: "entry_appended",
+				entry: { type: "custom", id: "e-state", parentId: null, timestamp: "", customType: "goal-state", data: {} },
+			});
+			expect(label()).toMatch(/thought for \d+s/);
+			await toolEntry("e-tool-1");
+			expect(label()).not.toContain("thought for");
+
+			// The ACP provider appends the next row synchronously while this block's tail and thinking_end are still
+			// queued. A grouped row renders nothing new but is still a tool row.
+			const secondMsg = makeAssistantMessage(
+				[
+					{ type: "thinking", thinking: "plan" },
+					{ type: "thinking", thinking: "step 2" },
+				],
+				empty,
+			);
+			await update(secondMsg, { type: "thinking_delta", contentIndex: 1, delta: "step" });
+			expect(label()).toContain("still thinking with high effort");
+			renderNextAcpEntry = false;
+			await toolEntry("e-tool-2");
+			expect(label()).not.toContain("still thinking");
+			await update(secondMsg, { type: "thinking_delta", contentIndex: 1, delta: " 2" });
+			await update(secondMsg, { type: "thinking_end", contentIndex: 1, content: "step 2" });
+			expect(label()).not.toContain("still thinking");
+			expect(label()).not.toContain("thought for");
+
+			// Thinking after the row is a new run.
+			await update(secondMsg, { type: "thinking_delta", contentIndex: 2, delta: "next" });
+			expect(label()).toContain("still thinking with high effort");
 		} finally {
 			indicator.dispose();
 		}
